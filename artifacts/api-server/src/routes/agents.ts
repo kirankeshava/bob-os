@@ -1,11 +1,12 @@
 import { Router } from "express";
 import { eq, desc } from "drizzle-orm";
-import { db, agentRunsTable, businessesTable, tasksTable, taskCommentsTable, skillsTable } from "@workspace/db";
+import { db, agentRunsTable, businessesTable, tasksTable, taskCommentsTable } from "@workspace/db";
 import { openai } from "@workspace/integrations-openai-ai-server";
 import { GetAgentRunParams, TriggerOrchestrateParams } from "@workspace/api-zod";
 import { logger } from "../lib/logger";
 import { triggerExecutionCycle } from "../services/task-executor";
 import { ensureInbox } from "../lib/agentmail";
+import { CEO_SKILL_SUMMARY } from "../lib/ceo-skill";
 
 const router = Router();
 
@@ -133,7 +134,18 @@ async function runOrchestratorAgent(runId: number, businessId: number) {
     .from(tasksTable)
     .where(eq(tasksTable.businessId, businessId));
 
-  const systemPrompt = `You are an expert Orchestrator AI agent managing a business project. Create a detailed task breakdown for this business to achieve its revenue target in 30 days.
+  const systemPrompt = `You are an expert Orchestrator AI agent managing a business project. You operate with CEO-level strategic discipline — you don't just break down tasks, you plan for revenue with focus and urgency.
+
+${CEO_SKILL_SUMMARY}
+
+---
+
+Apply the CEO framework above when planning tasks. Specifically:
+- **Prioritize distribution tasks first** — customers must be able to find and reach the business before anything else matters
+- **Product second** — the core offer must work before optimizing
+- **Revenue-generating tasks get CRITICAL priority** — outreach, sales, pitching, monetization setup
+- **Only plan one layer at a time** — do not plan for hypothetical future stages
+- **Assess default alive/dead** — if there's no revenue path in these tasks, flag it in the first task's description
 
 Return ONLY a JSON array of task objects with this structure:
 {
@@ -146,7 +158,7 @@ Return ONLY a JSON array of task objects with this structure:
   "status": "open"
 }
 
-Create 5-8 actionable tasks across different agent types. Focus on tasks that directly drive revenue.`;
+Create 5-8 actionable tasks across different agent types. The first 2 tasks MUST be distribution/outreach focused. Focus on tasks that directly and immediately drive revenue.`;
 
   const existingTaskList = existingTasks.map((t) => `- ${t.title} (${t.status})`).join("\n");
 
@@ -192,8 +204,6 @@ Create a comprehensive task plan to achieve the revenue target.`,
 
   log += `Creating ${tasks.length} tasks...\n`;
 
-  const createdTasks: Array<{ id: number; title: string; agentType: string }> = [];
-
   for (const task of tasks) {
     const [newTask] = await db
       .insert(tasksTable)
@@ -217,7 +227,6 @@ Create a comprehensive task plan to achieve the revenue target.`,
       content: `Task created by Orchestrator Agent. Priority: ${task.priority}. Deliverable: ${task.deliverables || "See description"}`,
     });
 
-    createdTasks.push({ id: newTask.id, title: newTask.title, agentType: newTask.agentType ?? "agent" });
     log += `Created task: ${task.title}\n`;
   }
 
@@ -225,37 +234,6 @@ Create a comprehensive task plan to achieve the revenue target.`,
     .update(businessesTable)
     .set({ status: "active", updatedAt: new Date() })
     .where(eq(businessesTable.id, businessId));
-
-  // Proactive skill suggestion: check if installed skills would benefit the new tasks
-  try {
-    const activeSkills = await db.select().from(skillsTable).where(eq(skillsTable.status, "active"));
-    const taskTypes = [...new Set(createdTasks.map(t => t.agentType))];
-    const relevantSkills = activeSkills.filter(skill => {
-      const skillText = `${skill.name} ${skill.description}`.toLowerCase();
-      return taskTypes.some(type => skillText.includes(type));
-    });
-
-    if (relevantSkills.length > 0) {
-      const skillNames = relevantSkills.map(s => s.name).join(", ");
-      for (const task of createdTasks) {
-        const matchingSkills = relevantSkills.filter(skill => {
-          const skillText = `${skill.name} ${skill.description}`.toLowerCase();
-          return skillText.includes(task.agentType) || skillText.includes(task.title.toLowerCase().split(" ")[0]);
-        });
-        if (matchingSkills.length > 0) {
-          await db.insert(taskCommentsTable).values({
-            taskId: task.id,
-            author: "Orchestrator",
-            agentType: "orchestrator",
-            content: `**🧠 Skills injected:** The following skills will augment this agent: ${matchingSkills.map(s => `**${s.name}**`).join(", ")}. Their instructions have been added to the agent's context automatically.`,
-          });
-        }
-      }
-      log += `Skill suggestion: ${skillNames} will augment relevant tasks.\n`;
-    }
-  } catch (skillErr) {
-    logger.warn({ skillErr }, "Orchestrator: skill suggestion step failed");
-  }
 
   await db
     .update(agentRunsTable)
