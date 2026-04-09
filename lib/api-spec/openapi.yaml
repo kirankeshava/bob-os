@@ -476,6 +476,103 @@ paths:
         "404":
           description: No CEO review found
 
+  /businesses/{businessId}/knowledge-base:
+    get:
+      operationId: listKnowledgeBaseEntries
+      tags: [businesses]
+      summary: List all knowledge base entries for a business
+      parameters:
+        - name: businessId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: List of knowledge base entries
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/KnowledgeBaseEntry"
+
+  /businesses/{businessId}/knowledge-base/upload:
+    post:
+      operationId: uploadKnowledgeBaseFile
+      tags: [businesses]
+      summary: Upload a file to the knowledge base (PDF, DOCX, TXT)
+      parameters:
+        - name: businessId
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+              required:
+                - file
+      responses:
+        "201":
+          description: Created knowledge base entry
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/KnowledgeBaseEntry"
+
+  /businesses/{businessId}/knowledge-base/url:
+    post:
+      operationId: ingestKnowledgeBaseUrl
+      tags: [businesses]
+      summary: Ingest a URL into the knowledge base
+      parameters:
+        - name: businessId
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/IngestKnowledgeBaseUrlBody"
+      responses:
+        "201":
+          description: Created knowledge base entry
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/KnowledgeBaseEntry"
+
+  /businesses/{businessId}/knowledge-base/{entryId}:
+    delete:
+      operationId: deleteKnowledgeBaseEntry
+      tags: [businesses]
+      summary: Delete a knowledge base entry
+      parameters:
+        - name: businessId
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: entryId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Deleted
+
   /businesses/{businessId}/artifacts:
     get:
       operationId: listBusinessArtifacts
@@ -1262,6 +1359,51 @@ components:
         - artifactsCount
         - sourceFilesCount
         - errorMessage
+
+    KnowledgeBaseEntry:
+      type: object
+      properties:
+        id:
+          type: integer
+        businessId:
+          type: integer
+        entryType:
+          type: string
+          enum: [file, url]
+        sourceName:
+          type: string
+        sourceUrl:
+          type: ["string", "null"]
+        rawText:
+          type: string
+        status:
+          type: string
+          enum: [processing, ready, error]
+        errorMessage:
+          type: ["string", "null"]
+        createdAt:
+          type: string
+        updatedAt:
+          type: string
+      required:
+        - id
+        - businessId
+        - entryType
+        - sourceName
+        - sourceUrl
+        - rawText
+        - status
+        - errorMessage
+        - createdAt
+        - updatedAt
+
+    IngestKnowledgeBaseUrlBody:
+      type: object
+      properties:
+        url:
+          type: string
+      required:
+        - url
 
     SendEmailBody:
       type: object
