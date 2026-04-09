@@ -14,7 +14,8 @@ import {
   useTriggerOrchestrate,
   useSendBusinessEmail,
   useOnboardContact,
-  Task, TaskStatus, BusinessArtifact, OutreachEmail,
+  useGetBusinessCeoReview, getGetBusinessCeoReviewQueryKey,
+  Task, TaskStatus, BusinessArtifact, OutreachEmail, CeoReview,
 } from "@workspace/api-client-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -30,6 +31,7 @@ import {
   MessageSquare, Send, DollarSign, UserPlus, X,
   Banknote, ShieldAlert, Globe, Mail, ExternalLink, Zap,
   Inbox, Copy, Plus, Users, ArrowUpRight, ArrowDownLeft,
+  BarChart2, Flame, Leaf, TrendingUp, Target,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useQueryClient } from "@tanstack/react-query";
@@ -796,6 +798,98 @@ function InboxTab({ businessId, businessName, business }: InboxTabProps) {
   );
 }
 
+// ─── CEO Status Panel ─────────────────────────────────────────────────────────
+
+function CeoStatusPanel({ businessId }: { businessId: number }) {
+  const { data: review, isLoading } = useGetBusinessCeoReview(businessId, {
+    query: {
+      queryKey: getGetBusinessCeoReviewQueryKey(businessId),
+      refetchInterval: 60000,
+      retry: false,
+    },
+  });
+
+  const modeConfig = review?.mode === "peacetime"
+    ? { label: "PEACETIME", color: "text-emerald-400", bg: "bg-emerald-500/10", border: "border-emerald-500/30", icon: Leaf }
+    : { label: "WARTIME", color: "text-orange-400", bg: "bg-orange-500/10", border: "border-orange-500/30", icon: Flame };
+
+  const runwayConfig: Record<string, { label: string; color: string; bg: string; border: string }> = {
+    alive: { label: "DEFAULT ALIVE", color: "text-green-400", bg: "bg-green-500/10", border: "border-green-500/30" },
+    at_risk: { label: "AT RISK", color: "text-amber-400", bg: "bg-amber-500/10", border: "border-amber-500/30" },
+    dead: { label: "DEFAULT DEAD", color: "text-red-400", bg: "bg-red-500/10", border: "border-red-500/30" },
+  };
+  const runway = runwayConfig[review?.runwayStatus ?? "at_risk"] ?? runwayConfig.at_risk;
+
+  const ModeIcon = modeConfig.icon;
+
+  return (
+    <Card className="border-purple-500/20 bg-purple-950/10" data-testid="ceo-status-panel">
+      <CardContent className="p-3">
+        <div className="flex items-center gap-2 mb-3">
+          <div className="p-1.5 rounded-md bg-purple-500/15 border border-purple-500/30">
+            <BarChart2 className="h-3.5 w-3.5 text-purple-400" />
+          </div>
+          <h3 className="text-xs font-bold font-mono uppercase tracking-wider text-purple-400">CEO View</h3>
+          {review && (
+            <span className="text-[9px] text-muted-foreground/50 font-mono ml-auto">
+              {timeAgo(review.createdAt)}
+            </span>
+          )}
+        </div>
+
+        {isLoading ? (
+          <div className="space-y-2">
+            {[1, 2, 3].map(i => <div key={i} className="h-7 bg-muted/20 rounded animate-pulse" />)}
+          </div>
+        ) : !review ? (
+          <div className="py-4 text-center">
+            <BarChart2 className="h-7 w-7 text-purple-500/20 mx-auto mb-2" />
+            <p className="text-xs text-muted-foreground">CEO review pending</p>
+            <p className="text-[10px] text-muted-foreground/60 mt-0.5">Runs automatically every 5 minutes</p>
+          </div>
+        ) : (
+          <div className="space-y-2.5">
+            {/* Mode + Runway row */}
+            <div className="flex items-center gap-2 flex-wrap">
+              <Badge className={`text-[10px] font-mono px-2 py-0.5 flex items-center gap-1 ${modeConfig.bg} ${modeConfig.border} ${modeConfig.color} border`}>
+                <ModeIcon className="h-2.5 w-2.5" />
+                {modeConfig.label}
+              </Badge>
+              <Badge className={`text-[10px] font-mono px-2 py-0.5 ${runway.bg} ${runway.border} ${runway.color} border`}>
+                {runway.label}
+              </Badge>
+            </div>
+
+            {/* One Metric */}
+            <div className="bg-muted/20 rounded-md p-2 border border-border/30">
+              <div className="flex items-center gap-1 mb-1">
+                <Target className="h-3 w-3 text-purple-400" />
+                <span className="text-[9px] text-muted-foreground uppercase font-mono tracking-wider">One Metric That Matters</span>
+              </div>
+              <p className="text-xs font-semibold text-foreground leading-snug">{review.oneMetric}</p>
+              <p className="text-[10px] text-muted-foreground font-mono mt-0.5">{review.oneMetricValue}</p>
+            </div>
+
+            {/* Top Priority */}
+            <div className="bg-muted/20 rounded-md p-2 border border-border/30">
+              <div className="flex items-center gap-1 mb-1">
+                <TrendingUp className="h-3 w-3 text-purple-400" />
+                <span className="text-[9px] text-muted-foreground uppercase font-mono tracking-wider">Top Priority</span>
+              </div>
+              <p className="text-xs text-foreground/90 leading-snug">{review.topPriority}</p>
+            </div>
+
+            {/* CEO Summary */}
+            <p className="text-[10px] text-muted-foreground/70 leading-relaxed italic border-l-2 border-purple-500/30 pl-2">
+              {review.summary}
+            </p>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export default function BusinessDetail() {
@@ -1041,6 +1135,9 @@ export default function BusinessDetail() {
         <div><p className="text-[10px] text-muted-foreground uppercase font-mono mb-0.5">Effort Level</p><p className="font-semibold text-sm capitalize">{business.effortLevel || "N/A"}</p></div>
         <div><p className="text-[10px] text-muted-foreground uppercase font-mono mb-0.5">Rank</p><p className="font-semibold text-sm">{business.rank} / 5</p></div>
       </div>
+
+      {/* CEO View */}
+      <CeoStatusPanel businessId={businessId} />
 
       {/* Website & Email Panel */}
       <Card className="border-border/50 bg-card/30">
