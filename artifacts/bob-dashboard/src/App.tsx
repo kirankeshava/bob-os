@@ -5,7 +5,6 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { Shell } from "@/components/layout/shell";
 import Dashboard from "@/pages/dashboard";
 import BusinessDetail from "@/pages/business-detail";
-import BusinessArtifactsPage from "@/pages/business-artifacts";
 import TaskDetail from "@/pages/task-detail";
 import AgentRuns from "@/pages/agent-runs";
 import BusinessSitePage from "@/pages/business-site";
@@ -39,7 +38,6 @@ function Router() {
       <Shell>
         <Switch>
           <Route path="/" component={Dashboard} />
-          <Route path="/businesses/:id/artifacts" component={BusinessArtifactsPage} />
           <Route path="/businesses/:id" component={BusinessDetail} />
           <Route path="/businesses/:id/tasks/:taskId" component={TaskDetail} />
           <Route path="/agent-runs" component={AgentRuns} />
