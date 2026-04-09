@@ -17,6 +17,10 @@ const SKIP_DIRS = new Set([
   "coverage",
   ".turbo",
   ".pnpm-store",
+  ".agents",
+  ".config",
+  ".replit-artifact",
+  "attached_assets",
 ]);
 
 const SKIP_EXTENSIONS = new Set([".map", ".log"]);
