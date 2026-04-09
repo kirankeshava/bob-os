@@ -4,7 +4,7 @@ import { db, agentRunsTable, businessesTable, tasksTable, taskCommentsTable, ski
 import { openai } from "@workspace/integrations-openai-ai-server";
 import { GetAgentRunParams, TriggerOrchestrateParams } from "@workspace/api-zod";
 import { logger } from "../lib/logger";
-import { triggerExecutionCycle, dispatchTaskNow } from "../services/task-executor";
+import { triggerExecutionCycle } from "../services/task-executor";
 import { ensureInbox } from "../lib/agentmail";
 import { CEO_SKILL_SUMMARY } from "../lib/ceo-skill";
 
@@ -224,7 +224,7 @@ Create a comprehensive task plan to achieve the revenue target.`,
 
     await db.insert(taskCommentsTable).values({
       taskId: newTask.id,
-      author: "Orchestrator",
+      author: "orchestrator",
       agentType: "orchestrator",
       content: `Task created by Orchestrator Agent. Priority: ${task.priority}. Deliverable: ${task.deliverables || "See description"}`,
     });
@@ -267,28 +267,6 @@ Create a comprehensive task plan to achieve the revenue target.`,
     }
   } catch (skillErr) {
     logger.warn({ skillErr }, "Orchestrator: skill suggestion step failed");
-  }
-
-  // Auto-approve all created tasks: set status to in_progress and dispatch immediately
-  for (const task of createdTasks) {
-    try {
-      await db
-        .update(tasksTable)
-        .set({ status: "in_progress", updatedAt: new Date() })
-        .where(eq(tasksTable.id, task.id));
-
-      await db.insert(taskCommentsTable).values({
-        taskId: task.id,
-        author: "Orchestrator",
-        agentType: "orchestrator",
-        content: `**🚀 Auto-approved by Orchestrator:** This task has been automatically set to in-progress and dispatched for immediate execution.`,
-      });
-
-      dispatchTaskNow(task.id);
-      log += `Auto-approved and dispatched task: ${task.title}\n`;
-    } catch (approveErr) {
-      logger.warn({ approveErr, taskId: task.id }, "Orchestrator: failed to auto-approve task");
-    }
   }
 
   await db
