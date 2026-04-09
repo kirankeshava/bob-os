@@ -10,6 +10,7 @@ import AgentRuns from "@/pages/agent-runs";
 import BusinessSitePage from "@/pages/business-site";
 import SkillsPage from "@/pages/skills";
 import CustomersPage from "@/pages/customers";
+import CeoPage from "@/pages/ceo";
 import NotFound from "@/pages/not-found";
 import { PasswordGate } from "@/components/password-gate";
 
@@ -43,6 +44,7 @@ function Router() {
           <Route path="/agent-runs" component={AgentRuns} />
           <Route path="/skills" component={SkillsPage} />
           <Route path="/customers" component={CustomersPage} />
+          <Route path="/ceo" component={CeoPage} />
           <Route component={NotFound} />
         </Switch>
       </Shell>

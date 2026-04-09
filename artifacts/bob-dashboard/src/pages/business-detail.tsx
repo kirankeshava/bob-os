@@ -15,10 +15,7 @@ import {
   useSendBusinessEmail,
   useOnboardContact,
   useGetBusinessCeoReview, getGetBusinessCeoReviewQueryKey,
-  useListKnowledgeBaseEntries, getListKnowledgeBaseEntriesQueryKey,
-  useIngestKnowledgeBaseUrl,
-  useDeleteKnowledgeBaseEntry,
-  Task, TaskStatus, BusinessArtifact, OutreachEmail, CeoReview, KnowledgeBaseEntry,
+  Task, TaskStatus, BusinessArtifact, OutreachEmail, CeoReview,
 } from "@workspace/api-client-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -35,7 +32,6 @@ import {
   Banknote, ShieldAlert, Globe, Mail, ExternalLink, Zap,
   Inbox, Copy, Plus, Users, ArrowUpRight, ArrowDownLeft,
   BarChart2, Flame, Leaf, TrendingUp, Target,
-  BookOpen, Upload, Link2, Trash2, CheckCircle, AlertTriangle as AlertIcon,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useQueryClient } from "@tanstack/react-query";
@@ -933,12 +929,6 @@ export default function BusinessDetail() {
     query: { enabled: !!businessId, queryKey: getGetBusinessSiteQueryKey(businessId) },
   });
 
-  const { data: kbEntries, isLoading: isLoadingKb } = useListKnowledgeBaseEntries(businessId, {
-    query: { enabled: !!businessId, queryKey: getListKnowledgeBaseEntriesQueryKey(businessId), refetchInterval: 5000 },
-  });
-  const ingestUrl = useIngestKnowledgeBaseUrl();
-  const deleteKbEntry = useDeleteKnowledgeBaseEntry();
-
   const generateSite = useGenerateBusinessSite();
   const updateTask = useUpdateTask();
   const createComment = useCreateTaskComment();
@@ -948,7 +938,7 @@ export default function BusinessDetail() {
   const [approvingId, setApprovingId] = useState<number | null>(null);
   const [messageOpenId, setMessageOpenId] = useState<number | null>(null);
   const [isGeneratingSite, setIsGeneratingSite] = useState(false);
-  const [activeTab, setActiveTab] = useState<"tasks" | "inbox" | "knowledge">("tasks");
+  const [activeTab, setActiveTab] = useState<"tasks" | "inbox">("tasks");
 
   const siteUrl = `${window.location.origin}${import.meta.env.BASE_URL.replace(/\/$/, "")}/sites/${businessId}`;
 
@@ -1301,20 +1291,6 @@ export default function BusinessDetail() {
             <span className="h-1.5 w-1.5 rounded-full bg-green-500 inline-block ml-0.5" />
           )}
         </button>
-        <button
-          className={`flex items-center gap-1.5 px-3 py-2 text-xs font-mono uppercase tracking-wider transition-colors border-b-2 -mb-px ${
-            activeTab === "knowledge"
-              ? "border-purple-500 text-purple-400"
-              : "border-transparent text-muted-foreground hover:text-foreground"
-          }`}
-          onClick={() => setActiveTab("knowledge")}
-        >
-          <BookOpen className="h-3 w-3" />
-          Knowledge Base
-          {(kbEntries?.length ?? 0) > 0 && (
-            <Badge variant="secondary" className="font-mono text-[9px] px-1 py-0 ml-0.5">{kbEntries?.length}</Badge>
-          )}
-        </button>
       </div>
 
       {/* Tasks Tab */}
@@ -1409,217 +1385,6 @@ export default function BusinessDetail() {
           business={business}
         />
       )}
-
-      {/* Knowledge Base Tab */}
-      {activeTab === "knowledge" && (
-        <KnowledgeBaseTab
-          entries={kbEntries ?? []}
-          isLoading={isLoadingKb}
-          onIngestUrl={(url) => {
-            ingestUrl.mutate({ businessId, data: { url } }, {
-              onSuccess: () => {
-                toast({ title: "URL added", description: "Indexing content in the background…" });
-                queryClient.invalidateQueries({ queryKey: getListKnowledgeBaseEntriesQueryKey(businessId) });
-              },
-              onError: () => toast({ title: "Error", description: "Failed to add URL.", variant: "destructive" }),
-            });
-          }}
-          onDeleteEntry={(entryId) => {
-            deleteKbEntry.mutate({ businessId, entryId }, {
-              onSuccess: () => {
-                toast({ title: "Deleted", description: "Knowledge base entry removed." });
-                queryClient.invalidateQueries({ queryKey: getListKnowledgeBaseEntriesQueryKey(businessId) });
-              },
-              onError: () => toast({ title: "Error", description: "Failed to delete entry.", variant: "destructive" }),
-            });
-          }}
-          onFileUpload={(file) => {
-            const formData = new FormData();
-            formData.append("file", file);
-            fetch(`${import.meta.env.BASE_URL.replace(/\/$/, "")}/api/businesses/${businessId}/knowledge-base/upload`, {
-              method: "POST",
-              body: formData,
-            }).then(r => {
-              if (r.ok) {
-                toast({ title: "File uploaded", description: "Extracting text in the background…" });
-                queryClient.invalidateQueries({ queryKey: getListKnowledgeBaseEntriesQueryKey(businessId) });
-              } else {
-                toast({ title: "Error", description: "Failed to upload file.", variant: "destructive" });
-              }
-            }).catch(() => toast({ title: "Error", description: "Failed to upload file.", variant: "destructive" }));
-          }}
-        />
-      )}
-    </div>
-  );
-}
-
-// ─── Knowledge Base Tab ───────────────────────────────────────────────────────
-
-interface KnowledgeBaseTabProps {
-  entries: KnowledgeBaseEntry[];
-  isLoading: boolean;
-  onIngestUrl: (url: string) => void;
-  onDeleteEntry: (entryId: number) => void;
-  onFileUpload: (file: File) => void;
-}
-
-function KnowledgeBaseTab({ entries, isLoading, onIngestUrl, onDeleteEntry, onFileUpload }: KnowledgeBaseTabProps) {
-  const [urlInput, setUrlInput] = useState("");
-  const [isIngesting, setIsIngesting] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
-  const handleIngestUrl = () => {
-    if (!urlInput.trim()) return;
-    setIsIngesting(true);
-    onIngestUrl(urlInput.trim());
-    setUrlInput("");
-    setIsIngesting(false);
-  };
-
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      onFileUpload(file);
-      e.target.value = "";
-    }
-  };
-
-  const statusIcon = (status: string) => {
-    if (status === "ready") return <CheckCircle className="h-3 w-3 text-green-400" />;
-    if (status === "error") return <AlertIcon className="h-3 w-3 text-red-400" />;
-    return <Loader2 className="h-3 w-3 text-blue-400 animate-spin" />;
-  };
-
-  const statusBadge = (status: string) => {
-    if (status === "ready") return <Badge className="text-[9px] font-mono px-1.5 py-0 bg-green-500/20 text-green-300 border-green-500/30 border">Ready</Badge>;
-    if (status === "error") return <Badge className="text-[9px] font-mono px-1.5 py-0 bg-red-500/20 text-red-300 border-red-500/30 border">Error</Badge>;
-    return <Badge className="text-[9px] font-mono px-1.5 py-0 bg-blue-500/20 text-blue-300 border-blue-500/30 border">Indexing…</Badge>;
-  };
-
-  const typeBadge = (type: string) => {
-    if (type === "url") return <Badge variant="outline" className="text-[9px] font-mono px-1.5 py-0 border-indigo-500/40 text-indigo-400"><Link2 className="h-2.5 w-2.5 mr-0.5 inline" />URL</Badge>;
-    return <Badge variant="outline" className="text-[9px] font-mono px-1.5 py-0 border-orange-500/40 text-orange-400"><FileText className="h-2.5 w-2.5 mr-0.5 inline" />File</Badge>;
-  };
-
-  return (
-    <div className="space-y-4">
-      {/* Add entries panel */}
-      <Card className="border-border/50 bg-card/30">
-        <CardContent className="p-4 space-y-4">
-          <div className="flex items-center gap-2 border-l-2 border-purple-500/60 pl-3">
-            <BookOpen className="h-4 w-4 text-purple-400" />
-            <h2 className="text-sm font-bold font-mono uppercase tracking-wider text-purple-400">Add Knowledge</h2>
-          </div>
-
-          {/* URL ingestion */}
-          <div className="space-y-1.5">
-            <label className="text-[10px] text-muted-foreground font-mono uppercase block">Add Website URL</label>
-            <div className="flex gap-2">
-              <Input
-                value={urlInput}
-                onChange={e => setUrlInput(e.target.value)}
-                placeholder="https://yoursite.com/faq"
-                className="text-xs font-mono h-8 border-border/50 bg-muted/10 flex-1"
-                onKeyDown={e => { if (e.key === "Enter") handleIngestUrl(); }}
-              />
-              <Button
-                size="sm"
-                className="h-8 font-mono text-xs bg-purple-600 hover:bg-purple-500 text-white"
-                onClick={handleIngestUrl}
-                disabled={!urlInput.trim() || isIngesting}
-              >
-                <Link2 className="mr-1 h-3 w-3" />
-                Add URL
-              </Button>
-            </div>
-          </div>
-
-          {/* File upload */}
-          <div className="space-y-1.5">
-            <label className="text-[10px] text-muted-foreground font-mono uppercase block">Upload File (PDF, DOCX, TXT)</label>
-            <div className="flex gap-2">
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".pdf,.docx,.txt,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain"
-                className="hidden"
-                onChange={handleFileChange}
-              />
-              <Button
-                size="sm"
-                variant="outline"
-                className="h-8 font-mono text-xs border-border/50 text-muted-foreground hover:text-foreground"
-                onClick={() => fileInputRef.current?.click()}
-              >
-                <Upload className="mr-1 h-3 w-3" />
-                Choose File
-              </Button>
-              <p className="text-[10px] text-muted-foreground/60 font-mono self-center">Max 20 MB</p>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Entries list */}
-      <div className="space-y-2">
-        <div className="flex items-center gap-2">
-          <h3 className="text-[10px] font-mono uppercase text-muted-foreground tracking-wider">Entries ({entries.length})</h3>
-        </div>
-
-        {isLoading ? (
-          <div className="space-y-2">{[1, 2].map(i => <div key={i} className="h-14 bg-muted/20 rounded animate-pulse" />)}</div>
-        ) : entries.length === 0 ? (
-          <Card className="border-dashed border-purple-500/20 bg-card/10">
-            <CardContent className="p-8 text-center">
-              <BookOpen className="h-10 w-10 text-purple-500/20 mx-auto mb-3" />
-              <p className="text-sm font-medium text-muted-foreground">No entries yet</p>
-              <p className="text-xs text-muted-foreground/60 mt-1">Add a URL or upload a file to give the AI agent business-specific context</p>
-            </CardContent>
-          </Card>
-        ) : (
-          entries.map(entry => (
-            <Card key={entry.id} className="bg-card/40 border-border/40 hover:border-border/70 transition-colors">
-              <CardContent className="p-3">
-                <div className="flex items-start justify-between gap-2">
-                  <div className="flex items-start gap-2 flex-1 min-w-0">
-                    {statusIcon(entry.status)}
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-1.5 flex-wrap mb-0.5">
-                        {typeBadge(entry.entryType)}
-                        {statusBadge(entry.status)}
-                        <span className="text-[10px] text-muted-foreground/60 font-mono">{timeAgo(entry.createdAt)}</span>
-                      </div>
-                      <p className="text-xs font-medium text-foreground/80 truncate">{entry.sourceName}</p>
-                      {entry.sourceUrl && (
-                        <a href={entry.sourceUrl} target="_blank" rel="noopener noreferrer" className="text-[10px] text-indigo-400/70 hover:text-indigo-400 font-mono truncate block">
-                          {entry.sourceUrl}
-                        </a>
-                      )}
-                      {entry.status === "error" && entry.errorMessage && (
-                        <p className="text-[10px] text-red-400/70 font-mono mt-0.5">{entry.errorMessage}</p>
-                      )}
-                      {entry.status === "ready" && entry.rawText && (
-                        <p className="text-[10px] text-muted-foreground/50 font-mono mt-0.5 line-clamp-1">
-                          {entry.rawText.slice(0, 120)}…
-                        </p>
-                      )}
-                    </div>
-                  </div>
-                  <Button
-                    size="icon"
-                    variant="ghost"
-                    className="h-6 w-6 shrink-0 text-muted-foreground/40 hover:text-red-400 transition-colors"
-                    onClick={() => onDeleteEntry(entry.id)}
-                  >
-                    <Trash2 className="h-3 w-3" />
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
-          ))
-        )}
-      </div>
     </div>
   );
 }

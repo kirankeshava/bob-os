@@ -9,4 +9,5 @@ export * from "./signups";
 export * from "./skills";
 export * from "./customers";
 export * from "./ceo-reviews";
-export * from "./knowledge-base";
+export * from "./ceo-plan";
+export * from "./ceo-chat";
