@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation } from "wouter";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -26,10 +26,7 @@ import {
   TrendingUp,
   TrendingDown,
   Minus,
-  Users,
   Target,
-  BarChart2,
-  Circle,
   ArrowRight,
   Filter,
   RefreshCw,
