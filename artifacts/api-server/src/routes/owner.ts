@@ -1,6 +1,6 @@
 import { Router } from "express";
-import { eq, desc, and, lt, gte } from "drizzle-orm";
-import { db, businessesTable, tasksTable, taskCommentsTable, agentRunsTable } from "@workspace/db";
+import { eq, desc } from "drizzle-orm";
+import { db, businessesTable, tasksTable, taskCommentsTable, agentRunsTable, businessSitesTable, knowledgeBaseEntriesTable } from "@workspace/db";
 
 const router = Router();
 
@@ -8,11 +8,16 @@ router.get("/dashboard", async (_req, res) => {
   const now = Date.now();
   const oneDayMs = 24 * 60 * 60 * 1000;
   const sixHoursMs = 6 * 60 * 60 * 1000;
+  const staleThresholdMs = 2 * 60 * 60 * 1000;
 
   const businesses = await db.select().from(businessesTable).orderBy(businessesTable.rank);
   const allTasks = await db.select().from(tasksTable).orderBy(tasksTable.updatedAt);
+  const allSites = await db.select().from(businessSitesTable);
+  const allKb = await db.select().from(knowledgeBaseEntriesTable);
 
   const waitingTasks = allTasks.filter((t) => t.status === "waiting_approval");
+  const inProgressTasks = allTasks.filter((t) => t.status === "in_progress");
+  const openTasks = allTasks.filter((t) => t.status === "open");
 
   const allComments = await db
     .select()
@@ -36,12 +41,37 @@ router.get("/dashboard", async (_req, res) => {
     }
   }
 
-  const waitingApprovalItems = waitingTasks.map((task) => {
+  interface ActionItem {
+    priority: number;
+    category: string;
+    taskId: number | null;
+    businessId: number;
+    businessName: string;
+    title: string;
+    description: string;
+    agentType: string | null;
+    color: string;
+    icon: string;
+    urgency: "critical" | "high" | "medium" | "low";
+    waitMins: number;
+    actionNeeded: string;
+    whyBlocked: string;
+    valueAdd: string;
+    latestCommentContent: string | null;
+    updatedAt: string;
+  }
+
+  const ownerActionItems: ActionItem[] = [];
+
+  for (const task of waitingTasks) {
     const business = businesses.find((b) => b.id === task.businessId);
     const agentComment = agentCommentsByTask.get(task.id) ?? null;
     const latestComment = latestCommentsByTask.get(task.id) ?? null;
     const waitMs = now - new Date(task.updatedAt).getTime();
     const waitMins = Math.floor(waitMs / 60000);
+
+    const taskText = `${task.title} ${task.description ?? ""}`.toLowerCase();
+    const isPayment = /\$[\d,]+|budget|spend|payment|fund|invest|cost|fee|money/.test(taskText);
 
     let actionNeeded = "";
     let whyBlocked = "";
@@ -49,54 +79,19 @@ router.get("/dashboard", async (_req, res) => {
 
     if (agentComment) {
       const content = agentComment.content;
-
       const actionMatch = content.match(/action[:\s]+([^\n]+)/i) ??
         content.match(/needs?[:\s]+([^\n]+)/i) ??
-        content.match(/please[:\s]+([^\n]+)/i) ??
-        content.match(/requesting[:\s]+([^\n]+)/i);
-      if (actionMatch) {
-        actionNeeded = actionMatch[1].trim().slice(0, 120);
-      } else {
-        const firstLine = content.split("\n").find((l) => l.trim().length > 10);
-        actionNeeded = firstLine ? firstLine.trim().slice(0, 120) : "Review and approve this task";
-      }
+        content.match(/please[:\s]+([^\n]+)/i);
+      actionNeeded = actionMatch ? actionMatch[1].trim().slice(0, 120) : content.split("\n").find((l) => l.trim().length > 10)?.trim().slice(0, 120) ?? "Review and approve this task";
 
-      const whyMatch = content.match(/why[:\s]+([^\n]+)/i) ??
-        content.match(/because[:\s]+([^\n]+)/i) ??
-        content.match(/reason[:\s]+([^\n]+)/i) ??
-        content.match(/blocked[:\s]+([^\n]+)/i);
-      if (whyMatch) {
-        whyBlocked = whyMatch[1].trim().slice(0, 120);
-      } else {
-        const taskDesc = task.description ?? "";
-        const isPayment = taskDesc.match(/\$[\d,]+|budget|spend|payment|fund|invest/i);
-        const isAccount = taskDesc.match(/account|sign.?up|register|platform|profile/i);
-        if (isPayment) {
-          whyBlocked = "Requires financial authorization — spending real money";
-        } else if (isAccount) {
-          whyBlocked = "Needs owner credentials or external account access";
-        } else {
-          whyBlocked = "Requires owner decision before agent can continue";
-        }
-      }
+      const whyMatch = content.match(/why[:\s]+([^\n]+)/i) ?? content.match(/blocked[:\s]+([^\n]+)/i);
+      whyBlocked = whyMatch ? whyMatch[1].trim().slice(0, 120) : isPayment ? "Requires financial authorization" : "Requires owner decision";
 
-      const valueMatch = content.match(/value[:\s]+([^\n]+)/i) ??
-        content.match(/impact[:\s]+([^\n]+)/i) ??
-        content.match(/benefit[:\s]+([^\n]+)/i) ??
-        content.match(/unlock[s]?[:\s]+([^\n]+)/i) ??
-        content.match(/enable[s]?[:\s]+([^\n]+)/i);
-      if (valueMatch) {
-        valueAdd = valueMatch[1].trim().slice(0, 120);
-      } else {
-        valueAdd = `Unblocks ${task.agentType ?? "agent"} from continuing on ${business?.name ?? "this project"}`;
-      }
+      const valueMatch = content.match(/value[:\s]+([^\n]+)/i) ?? content.match(/impact[:\s]+([^\n]+)/i) ?? content.match(/unlock[s]?[:\s]+([^\n]+)/i);
+      valueAdd = valueMatch ? valueMatch[1].trim().slice(0, 120) : `Unblocks ${task.agentType ?? "agent"} on ${business?.name ?? "this project"}`;
     } else {
-      const taskDesc = task.description ?? "";
-      actionNeeded = `Review and approve: ${task.title}`;
-      const isPayment = taskDesc.match(/\$[\d,]+|budget|spend|payment|fund|invest/i);
-      whyBlocked = isPayment
-        ? "Requires financial authorization — spending real money"
-        : "Requires owner decision before agent can continue";
+      actionNeeded = isPayment ? `Approve spend: ${task.title}` : `Review & approve: ${task.title}`;
+      whyBlocked = isPayment ? "Requires financial authorization" : "Requires owner decision";
       valueAdd = `Unblocks progress on ${business?.name ?? "this project"}`;
     }
 
@@ -105,37 +100,182 @@ router.get("/dashboard", async (_req, res) => {
     else if (waitMins >= 60 * 4) urgency = "high";
     else if (waitMins >= 60) urgency = "medium";
 
-    return {
+    ownerActionItems.push({
+      priority: isPayment ? 0 : 1,
+      category: isPayment ? "payment_approval" : "approval",
       taskId: task.id,
       businessId: task.businessId,
       businessName: business?.name ?? "Unknown",
       title: task.title,
-      agentType: task.agentType ?? "agent",
-      assignedAgent: task.assignedAgent ?? null,
-      priority: task.priority,
-      waitMins,
+      description: task.description ?? "",
+      agentType: task.agentType,
+      color: isPayment ? "red" : "amber",
+      icon: isPayment ? "dollar" : "shield",
       urgency,
+      waitMins,
       actionNeeded,
       whyBlocked,
       valueAdd,
       latestCommentContent: latestComment?.content ?? null,
       updatedAt: task.updatedAt.toISOString(),
-    };
-  });
+    });
+  }
 
-  waitingApprovalItems.sort((a, b) => b.waitMins - a.waitMins);
+  for (const task of [...inProgressTasks, ...openTasks]) {
+    if (task.priority === "critical") {
+      const business = businesses.find((b) => b.id === task.businessId);
+      ownerActionItems.push({
+        priority: 2,
+        category: "critical_task",
+        taskId: task.id,
+        businessId: task.businessId,
+        businessName: business?.name ?? "Unknown",
+        title: task.title,
+        description: task.description ?? "",
+        agentType: task.agentType,
+        color: "red",
+        icon: "flame",
+        urgency: "high",
+        waitMins: 0,
+        actionNeeded: `Monitor critical task: ${task.title}`,
+        whyBlocked: `Status: ${task.status} — needs attention due to critical priority`,
+        valueAdd: `Directly impacts revenue target for ${business?.name ?? "this project"}`,
+        latestCommentContent: latestCommentsByTask.get(task.id)?.content ?? null,
+        updatedAt: task.updatedAt.toISOString(),
+      });
+    }
+  }
 
-  const activeAgentRuns = await db
-    .select()
-    .from(agentRunsTable)
-    .where(eq(agentRunsTable.status, "running"))
-    .orderBy(desc(agentRunsTable.updatedAt));
+  for (const task of openTasks.filter((t) => t.priority === "high")) {
+    const business = businesses.find((b) => b.id === task.businessId);
+    ownerActionItems.push({
+      priority: 3,
+      category: "high_priority_unstarted",
+      taskId: task.id,
+      businessId: task.businessId,
+      businessName: business?.name ?? "Unknown",
+      title: task.title,
+      description: task.description ?? "",
+      agentType: task.agentType,
+      color: "orange",
+      icon: "alert",
+      urgency: "medium",
+      waitMins: 0,
+      actionNeeded: `High-priority task not started: ${task.title}`,
+      whyBlocked: "Sitting in Open queue — not yet picked up by an agent",
+      valueAdd: `Getting this started accelerates ${business?.name ?? "this project"}`,
+      latestCommentContent: null,
+      updatedAt: task.updatedAt.toISOString(),
+    });
+  }
+
+  for (const task of inProgressTasks) {
+    const lastUpdate = task.lastProgressUpdate ? new Date(task.lastProgressUpdate).getTime() : 0;
+    if (lastUpdate > 0 && now - lastUpdate > staleThresholdMs && task.priority !== "critical") {
+      const business = businesses.find((b) => b.id === task.businessId);
+      const staleHours = Math.floor((now - lastUpdate) / (60 * 60 * 1000));
+      ownerActionItems.push({
+        priority: 4,
+        category: "stale_task",
+        taskId: task.id,
+        businessId: task.businessId,
+        businessName: business?.name ?? "Unknown",
+        title: task.title,
+        description: task.description ?? "",
+        agentType: task.agentType,
+        color: "yellow",
+        icon: "clock",
+        urgency: staleHours >= 24 ? "high" : "medium",
+        waitMins: staleHours * 60,
+        actionNeeded: `Stale for ${staleHours}h — may need a nudge or reassignment`,
+        whyBlocked: "No progress update received — agent may be stuck",
+        valueAdd: `Re-activating this keeps ${business?.name ?? "this project"} on track`,
+        latestCommentContent: latestCommentsByTask.get(task.id)?.content ?? null,
+        updatedAt: task.updatedAt.toISOString(),
+      });
+    }
+  }
+
+  for (const biz of businesses) {
+    const hasSite = allSites.some((s) => s.businessId === biz.id);
+    const kbCount = allKb.filter((k) => k.businessId === biz.id).length;
+
+    if (!hasSite) {
+      ownerActionItems.push({
+        priority: 5,
+        category: "setup_gap",
+        taskId: null,
+        businessId: biz.id,
+        businessName: biz.name,
+        title: "Generate public website",
+        description: "",
+        agentType: null,
+        color: "blue",
+        icon: "globe",
+        urgency: "low",
+        waitMins: 0,
+        actionNeeded: "Generate a public website to start acquiring customers",
+        whyBlocked: "No website exists — prospects have nowhere to convert",
+        valueAdd: "Enables inbound leads and gives outreach credibility",
+        latestCommentContent: null,
+        updatedAt: new Date().toISOString(),
+      });
+    }
+
+    if (kbCount === 0 && hasSite) {
+      ownerActionItems.push({
+        priority: 6,
+        category: "setup_gap",
+        taskId: null,
+        businessId: biz.id,
+        businessName: biz.name,
+        title: "Add knowledge base content",
+        description: "",
+        agentType: null,
+        color: "purple",
+        icon: "book",
+        urgency: "low",
+        waitMins: 0,
+        actionNeeded: "Add knowledge base entries so AI responses are grounded",
+        whyBlocked: "Empty knowledge base — AI can't answer business-specific questions",
+        valueAdd: "Improves customer support quality and agent autonomy",
+        latestCommentContent: null,
+        updatedAt: new Date().toISOString(),
+      });
+    }
+  }
+
+  ownerActionItems.sort((a, b) => a.priority - b.priority || b.waitMins - a.waitMins);
+
+  const agentRoster: Array<{
+    agentType: string;
+    businessId: number;
+    businessName: string;
+    currentTask: { taskId: number; title: string; status: string } | null;
+    lastUpdate: string;
+    status: string;
+  }> = [];
+
+  const seenAgentBiz = new Set<string>();
+  for (const task of inProgressTasks) {
+    const key = `${task.agentType ?? "agent"}-${task.businessId}`;
+    if (seenAgentBiz.has(key)) continue;
+    seenAgentBiz.add(key);
+
+    const biz = businesses.find((b) => b.id === task.businessId);
+    agentRoster.push({
+      agentType: task.agentType ?? "agent",
+      businessId: task.businessId,
+      businessName: biz?.name ?? "Unknown",
+      currentTask: { taskId: task.id, title: task.title, status: task.status },
+      lastUpdate: (task.lastProgressUpdate ?? task.updatedAt).toISOString(),
+      status: "working",
+    });
+  }
 
   const activeAgentsByBusiness = new Map<number, number>();
-  for (const run of activeAgentRuns) {
-    if (run.businessId != null) {
-      activeAgentsByBusiness.set(run.businessId, (activeAgentsByBusiness.get(run.businessId) ?? 0) + 1);
-    }
+  for (const item of agentRoster) {
+    activeAgentsByBusiness.set(item.businessId, (activeAgentsByBusiness.get(item.businessId) ?? 0) + 1);
   }
 
   const projectHealth = businesses.map((biz) => {
@@ -183,27 +323,11 @@ router.get("/dashboard", async (_req, res) => {
     };
   });
 
-  const agentRoster = activeAgentRuns.map((run) => {
-    const biz = businesses.find((b) => b.id === run.businessId);
-    const currentTask = allTasks.find(
-      (t) => t.businessId === run.businessId && t.status === "in_progress" && t.agentType === run.agentType
-    );
-    return {
-      runId: run.id,
-      agentType: run.agentType,
-      businessId: run.businessId,
-      businessName: biz?.name ?? "Global",
-      currentTask: currentTask ? { taskId: currentTask.id, title: currentTask.title, status: currentTask.status } : null,
-      lastUpdate: run.updatedAt.toISOString(),
-      status: run.status,
-    };
-  });
-
-  const totalWaiting = waitingApprovalItems.length;
+  const totalWaiting = waitingTasks.length;
   const avgWaitMins = totalWaiting > 0
-    ? Math.round(waitingApprovalItems.reduce((s, t) => s + t.waitMins, 0) / totalWaiting)
+    ? Math.round(waitingTasks.reduce((s, t) => s + Math.floor((now - new Date(t.updatedAt).getTime()) / 60000), 0) / totalWaiting)
     : 0;
-  const activeAgentsCount = activeAgentRuns.length;
+  const activeAgentsCount = agentRoster.length;
   const projectsAtRisk = projectHealth.filter(
     (p) => p.stallStatus === "stalled_waiting" || p.stallStatus === "stalled_inactive"
   ).length;
@@ -244,7 +368,8 @@ router.get("/dashboard", async (_req, res) => {
     });
 
   res.json({
-    waitingApprovalItems,
+    ownerActionItems,
+    waitingApprovalItems: ownerActionItems.filter((i) => i.category === "payment_approval" || i.category === "approval"),
     projectHealth,
     agentRoster,
     portfolioMetrics: {
@@ -258,6 +383,7 @@ router.get("/dashboard", async (_req, res) => {
       budgetUtilizationPct,
       runwayDays,
       daysRemaining,
+      totalActionItems: ownerActionItems.length,
     },
     recentApprovals,
   });

@@ -156,8 +156,27 @@ interface ProjectHealth {
   stallStatus: "stalled_waiting" | "stalled_inactive" | "healthy" | "no_tasks";
 }
 
+interface OwnerActionItem {
+  priority: number;
+  category: string;
+  taskId: number | null;
+  businessId: number;
+  businessName: string;
+  title: string;
+  description: string;
+  agentType: string | null;
+  color: string;
+  icon: string;
+  urgency: "critical" | "high" | "medium" | "low";
+  waitMins: number;
+  actionNeeded: string;
+  whyBlocked: string;
+  valueAdd: string;
+  latestCommentContent: string | null;
+  updatedAt: string;
+}
+
 interface AgentRosterItem {
-  runId: number;
   agentType: string;
   businessId: number | null;
   businessName: string;
@@ -189,10 +208,11 @@ interface RecentApproval {
 }
 
 interface OwnerDashboard {
+  ownerActionItems: OwnerActionItem[];
   waitingApprovalItems: WaitingTask[];
   projectHealth: ProjectHealth[];
   agentRoster: AgentRosterItem[];
-  portfolioMetrics: PortfolioMetrics;
+  portfolioMetrics: PortfolioMetrics & { totalActionItems?: number };
   recentApprovals: RecentApproval[];
 }
 
@@ -474,6 +494,7 @@ export default function OwnerPage() {
   });
 
   const metrics = data?.portfolioMetrics;
+  const ownerActionItems = data?.ownerActionItems ?? [];
   const waitingItems = data?.waitingApprovalItems ?? [];
   const projectHealth = data?.projectHealth ?? [];
   const agentRoster = data?.agentRoster ?? [];
@@ -497,6 +518,36 @@ export default function OwnerPage() {
     }
     return map;
   }, [waitingItems]);
+
+  const actionColorMap: Record<string, string> = {
+    red: "text-red-400",
+    amber: "text-amber-400",
+    orange: "text-orange-400",
+    yellow: "text-yellow-400",
+    blue: "text-blue-400",
+    purple: "text-purple-400",
+    green: "text-green-400",
+  };
+
+  const actionBorderMap: Record<string, string> = {
+    red: "border-red-500/30 bg-red-500/5",
+    amber: "border-amber-500/30 bg-amber-500/5",
+    orange: "border-orange-500/30 bg-orange-500/5",
+    yellow: "border-yellow-500/30 bg-yellow-500/5",
+    blue: "border-blue-500/30 bg-blue-500/5",
+    purple: "border-purple-500/30 bg-purple-500/5",
+    green: "border-green-500/30 bg-green-500/5",
+  };
+
+  const actionIconMap: Record<string, React.ReactNode> = {
+    dollar: <DollarSign className="h-3.5 w-3.5" />,
+    shield: <ShieldAlert className="h-3.5 w-3.5" />,
+    flame: <Zap className="h-3.5 w-3.5" />,
+    alert: <AlertTriangle className="h-3.5 w-3.5" />,
+    clock: <Clock className="h-3.5 w-3.5" />,
+    globe: <Target className="h-3.5 w-3.5" />,
+    book: <Cpu className="h-3.5 w-3.5" />,
+  };
 
   if (isLoading) {
     return (
@@ -617,16 +668,16 @@ export default function OwnerPage() {
       {/* Owner Action Items */}
       <div className="space-y-3">
         <div className="flex items-center justify-between">
-          <h2 className="text-lg font-semibold tracking-tight uppercase font-mono border-l-2 border-amber-500 pl-3 flex items-center gap-2">
-            Owner Action Items
-            {waitingItems.length > 0 && (
-              <span className="inline-flex h-2 w-2 rounded-full bg-amber-500 animate-pulse" />
+          <h2 className="text-lg font-semibold tracking-tight uppercase font-mono border-l-2 border-cyan-500 pl-3 flex items-center gap-2">
+            Your Action Items
+            {ownerActionItems.length > 0 && (
+              <span className="inline-flex h-2 w-2 rounded-full bg-cyan-500 animate-pulse" />
             )}
           </h2>
-          <span className="text-[10px] text-muted-foreground font-mono">{waitingItems.length} tasks waiting</span>
+          <span className="text-[10px] text-muted-foreground font-mono">{ownerActionItems.length} item{ownerActionItems.length !== 1 ? "s" : ""}</span>
         </div>
 
-        {waitingItems.length === 0 ? (
+        {ownerActionItems.length === 0 ? (
           <Card className="bg-card/30 border-dashed border-green-500/20 py-10 text-center">
             <div className="flex flex-col items-center gap-2">
               <CheckCircle2 className="h-8 w-8 text-green-500/40" />
@@ -635,26 +686,75 @@ export default function OwnerPage() {
             </div>
           </Card>
         ) : (
-          <div className="space-y-4">
-            {Array.from(groupedByBusiness.entries()).map(([bizName, tasks]) => (
-              <div key={bizName} className="space-y-2">
-                <div className="flex items-center gap-2 text-xs font-mono text-muted-foreground uppercase border-b border-border/30 pb-1">
-                  <Target className="h-3 w-3 text-primary" />
-                  {bizName}
-                  <span className="text-muted-foreground/50">· {tasks.length} task{tasks.length !== 1 ? "s" : ""}</span>
-                </div>
-                <div className="space-y-2">
-                  {tasks.map((task) => (
-                    <InlineApprove
-                      key={task.taskId}
-                      task={task}
-                      onApproved={() => queryClient.invalidateQueries({ queryKey: ["owner-dashboard"] })}
-                      onRejected={() => queryClient.invalidateQueries({ queryKey: ["owner-dashboard"] })}
-                    />
-                  ))}
-                </div>
+          <div className="space-y-2">
+            {waitingItems.length > 0 && (
+              <div className="space-y-4 mb-4">
+                {Array.from(groupedByBusiness.entries()).map(([bizName, tasks]) => (
+                  <div key={bizName} className="space-y-2">
+                    <div className="flex items-center gap-2 text-xs font-mono text-muted-foreground uppercase border-b border-border/30 pb-1">
+                      <Target className="h-3 w-3 text-primary" />
+                      {bizName}
+                      <span className="text-muted-foreground/50">· {tasks.length} approval{tasks.length !== 1 ? "s" : ""}</span>
+                    </div>
+                    <div className="space-y-2">
+                      {tasks.map((task) => (
+                        <InlineApprove
+                          key={task.taskId}
+                          task={task}
+                          onApproved={() => queryClient.invalidateQueries({ queryKey: ["owner-dashboard"] })}
+                          onRejected={() => queryClient.invalidateQueries({ queryKey: ["owner-dashboard"] })}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                ))}
               </div>
-            ))}
+            )}
+
+            {ownerActionItems.filter((a) => a.category !== "payment_approval" && a.category !== "approval").length > 0 && (
+              <Card className="bg-card/40 border-border/50">
+                <CardContent className="p-4">
+                  <ul className="space-y-2.5">
+                    {ownerActionItems
+                      .filter((a) => a.category !== "payment_approval" && a.category !== "approval")
+                      .map((action, i) => (
+                        <li
+                          key={`${action.category}-${action.taskId ?? action.businessId}-${i}`}
+                          className={`flex items-start gap-3 rounded-lg border p-3 transition-colors ${actionBorderMap[action.color] ?? "border-border/30"} ${action.taskId ? "cursor-pointer hover:bg-muted/20" : ""}`}
+                          onClick={action.taskId ? () => navigate(`/businesses/${action.businessId}/tasks/${action.taskId}`) : undefined}
+                        >
+                          <span className={`mt-0.5 shrink-0 ${actionColorMap[action.color] ?? "text-muted-foreground"}`}>
+                            {actionIconMap[action.icon] ?? <Target className="h-3.5 w-3.5" />}
+                          </span>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium text-foreground/90 leading-snug">{action.actionNeeded}</p>
+                            <div className="flex items-center gap-2 mt-1 flex-wrap">
+                              <Link href={`/businesses/${action.businessId}`}>
+                                <span className="text-[10px] font-mono text-primary/60 hover:text-primary">{action.businessName}</span>
+                              </Link>
+                              <Badge variant="outline" className={`text-[8px] font-mono uppercase px-1 py-0 ${
+                                action.urgency === "critical" ? "border-red-500/40 text-red-400" :
+                                action.urgency === "high" ? "border-orange-500/40 text-orange-400" :
+                                action.urgency === "medium" ? "border-amber-500/40 text-amber-400" :
+                                "border-border/30 text-muted-foreground"
+                              }`}>
+                                {action.category.replace(/_/g, " ")}
+                              </Badge>
+                              {action.agentType && <AgentBadge type={action.agentType} />}
+                            </div>
+                            <p className="text-[10px] text-muted-foreground/60 mt-1 leading-snug">{action.whyBlocked}</p>
+                          </div>
+                          {action.taskId && (
+                            <span className="text-muted-foreground/40 text-[10px] font-mono shrink-0 mt-0.5">
+                              T-{action.taskId} <ArrowRight className="inline h-2.5 w-2.5" />
+                            </span>
+                          )}
+                        </li>
+                      ))}
+                  </ul>
+                </CardContent>
+              </Card>
+            )}
           </div>
         )}
       </div>
@@ -808,8 +908,8 @@ export default function OwnerPage() {
                 </tr>
               </thead>
               <tbody>
-                {filteredRoster.map((agent) => (
-                  <tr key={agent.runId} className="border-b border-border/20 hover:bg-muted/10">
+                {filteredRoster.map((agent, idx) => (
+                  <tr key={`${agent.agentType}-${agent.businessId}-${idx}`} className="border-b border-border/20 hover:bg-muted/10">
                     <td className="px-3 py-2">
                       <AgentBadge type={agent.agentType} />
                     </td>
@@ -838,7 +938,7 @@ export default function OwnerPage() {
                         </Badge>
                       ) : (
                         <Badge variant="outline" className="text-[9px] font-mono uppercase px-1 py-0 border-border/30 text-muted-foreground">
-                          running
+                          working
                         </Badge>
                       )}
                     </td>
