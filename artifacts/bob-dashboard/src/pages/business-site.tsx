@@ -2,6 +2,7 @@ import { useRoute } from "wouter";
 import { useGetBusinessSitePublic, getGetBusinessSitePublicQueryKey, useGenerateBusinessSite } from "@workspace/api-client-react";
 import { useState, useEffect } from "react";
 import { Loader2, Mail, ArrowRight, Check, Star, Zap, Globe, ExternalLink } from "lucide-react";
+import { SignupModal } from "../components/signup-modal";
 
 function hexToRgb(hex: string) {
   const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
@@ -20,6 +21,8 @@ export default function BusinessSitePage() {
 
   const generateSite = useGenerateBusinessSite();
   const [isGenerating, setIsGenerating] = useState(false);
+  const [signupOpen, setSignupOpen] = useState(false);
+  const [selectedPlan, setSelectedPlan] = useState<string | undefined>(undefined);
 
   const site = data?.site;
   const business = data?.business;
@@ -34,6 +37,11 @@ export default function BusinessSitePage() {
       onSuccess: () => { setIsGenerating(false); refetch(); },
       onError: () => setIsGenerating(false),
     });
+  };
+
+  const openSignup = (planName?: string) => {
+    setSelectedPlan(planName);
+    setSignupOpen(true);
   };
 
   if (isLoading) {
@@ -81,6 +89,14 @@ export default function BusinessSitePage() {
 
   return (
     <div className="min-h-screen bg-white font-sans">
+      <SignupModal
+        isOpen={signupOpen}
+        onClose={() => setSignupOpen(false)}
+        planName={selectedPlan}
+        businessId={businessId}
+        accentColor={accent}
+      />
+
       {/* Navigation */}
       <nav className="sticky top-0 z-50 bg-white/90 backdrop-blur-sm border-b border-gray-100 shadow-sm">
         <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
@@ -93,13 +109,13 @@ export default function BusinessSitePage() {
             {pricing.length > 0 && <a href="#pricing" className="hover:text-gray-900 transition-colors">Pricing</a>}
             <a href="#contact" className="hover:text-gray-900 transition-colors">Contact</a>
           </div>
-          <a
-            href={`mailto:${site.contactEmail ?? ""}`}
+          <button
+            onClick={() => openSignup()}
             className="hidden md:flex items-center gap-2 px-4 py-2 rounded-lg text-white text-sm font-semibold transition-opacity hover:opacity-90"
             style={{ backgroundColor: accent }}
           >
             <Mail className="h-4 w-4" /> Get Started
-          </a>
+          </button>
         </div>
       </nav>
 
@@ -124,13 +140,13 @@ export default function BusinessSitePage() {
             {site.heroSubtitle ?? business.description}
           </p>
           <div className="flex flex-col sm:flex-row gap-4 justify-center">
-            <a
-              href={`mailto:${site.contactEmail ?? ""}`}
+            <button
+              onClick={() => openSignup()}
               className="inline-flex items-center gap-2 px-8 py-4 rounded-xl text-white font-bold text-lg transition-all hover:scale-105 shadow-lg"
               style={{ backgroundColor: accent, boxShadow: `0 10px 30px rgba(${accentRgb}, 0.35)` }}
             >
               Start Today <ArrowRight className="h-5 w-5" />
-            </a>
+            </button>
             {pricing.length > 0 && (
               <a
                 href="#pricing"
@@ -232,15 +248,15 @@ export default function BusinessSitePage() {
                         </li>
                       ))}
                     </ul>
-                    <a
-                      href={`mailto:${site.contactEmail ?? ""}?subject=Inquiry: ${plan.name} Plan`}
-                      className={`block text-center py-3 rounded-xl font-bold transition-all hover:opacity-90 ${
+                    <button
+                      onClick={() => openSignup(plan.name)}
+                      className={`block w-full text-center py-3 rounded-xl font-bold transition-all hover:opacity-90 ${
                         isPro ? "bg-white text-gray-900" : "text-white"
                       }`}
                       style={!isPro ? { backgroundColor: accent } : {}}
                     >
                       Get Started
-                    </a>
+                    </button>
                   </div>
                 );
               })}
@@ -253,16 +269,24 @@ export default function BusinessSitePage() {
       <section id="contact" className="py-24" style={{ backgroundColor: accent }}>
         <div className="max-w-3xl mx-auto px-6 text-center">
           <h2 className="text-3xl md:text-4xl font-black text-white mb-4">Ready to get started?</h2>
-          <p className="text-white/80 text-xl mb-8">Send us an email and we'll get back to you within 24 hours.</p>
-          {site.contactEmail && (
-            <a
-              href={`mailto:${site.contactEmail}`}
+          <p className="text-white/80 text-xl mb-8">Fill out our quick form and we'll have you set up within 24 hours.</p>
+          <div className="flex flex-col sm:flex-row gap-4 justify-center items-center">
+            <button
+              onClick={() => openSignup()}
               className="inline-flex items-center gap-3 bg-white px-8 py-4 rounded-xl font-bold text-lg transition-all hover:scale-105 shadow-lg"
               style={{ color: accent }}
             >
-              <Mail className="h-5 w-5" /> {site.contactEmail}
-            </a>
-          )}
+              <ArrowRight className="h-5 w-5" /> Get Started Now
+            </button>
+            {site.contactEmail && (
+              <a
+                href={`mailto:${site.contactEmail}`}
+                className="inline-flex items-center gap-2 text-white/80 hover:text-white text-sm font-medium transition-colors"
+              >
+                <Mail className="h-4 w-4" /> Or email us: {site.contactEmail}
+              </a>
+            )}
+          </div>
         </div>
       </section>
 

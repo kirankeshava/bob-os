@@ -54,6 +54,11 @@ pnpm workspace monorepo using TypeScript. Each package manages its own dependenc
   - `GET /agent/runs/:id` — Get run status
   - `GET/POST /businesses/:id/site` — Business website CRUD + GET /site/public + POST /site/generate (AI)
   - `GET/POST /businesses/:id/inbox` — AgentMail inbox messages + send email + email log
+  - `GET /skills` — List installed skills
+  - `GET /skills/search?q=` — Search GitHub for skills (SKILL.md repos)
+  - `POST /skills/install` — Install a skill by GitHub source (fetches SKILL.md)
+  - `PATCH /skills/:id` — Toggle skill status (active/disabled)
+  - `DELETE /skills/:id` — Remove a skill
 
 ## Database Schema (PostgreSQL via Drizzle)
 
@@ -63,6 +68,7 @@ pnpm workspace monorepo using TypeScript. Each package manages its own dependenc
 - `agent_runs` — Tracking AI agent executions (researcher, orchestrator)
 - `business_sites` — AI-generated website content per business (slug, hero, services, pricing, howItWorks, accentColor, AgentMail inbox)
 - `outreach_emails` — Log of emails sent/received via AgentMail per business
+- `skills` — Dynamic skills (SKILL.md packages from GitHub) with name, slug, source, content, status (active/disabled), businessId (null = global)
 
 ## AI Integration
 
@@ -70,5 +76,14 @@ pnpm workspace monorepo using TypeScript. Each package manages its own dependenc
 - Model: gpt-5.2 for both researcher and orchestrator agents
 - Researcher agent: Finds top 5 business ideas, saves to DB
 - Orchestrator agent: Creates 5-8 tasks per business with agent assignments
+
+## Skills System
+
+Dynamic skill acquisition from GitHub repositories (skills.sh ecosystem):
+- **Skills API**: `GET /api/skills`, `GET /api/skills/search?q=`, `POST /api/skills/install`, `PATCH /api/skills/:id`, `DELETE /api/skills/:id`
+- **Skill injection**: Before each task execution, active skills matching the task's title/agentType are injected into the agent's system prompt
+- **Orchestrator suggestions**: When creating task plans, orchestrator checks installed skills and logs which ones will augment each task as comments
+- **Skills UI**: `/skills` page in Bob dashboard with installed skills list (toggle/remove) and GitHub search to discover/install new ones
+- Skills source from GitHub via `https://raw.githubusercontent.com/{source}/main/SKILL.md` or `master/SKILL.md`
 
 See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details.
