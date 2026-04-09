@@ -9,6 +9,60 @@ import { logger } from "../lib/logger";
 
 const router = Router({ mergeParams: true });
 
+const BUSINESS_ONBOARDING_PROMPTS: Record<number, (data: Record<string, unknown>) => string> = {
+  1: (d) => {
+    const platforms = (d.platforms as string[]) || [];
+    const platformList = platforms.join(" and ");
+    const urls = [
+      d.googleListingUrl ? `Google Business: ${d.googleListingUrl}` : null,
+      d.yelpListingUrl ? `Yelp: ${d.yelpListingUrl}` : null,
+    ].filter(Boolean).join("\n");
+
+    return `Service: AI Review Reply & Reputation Autopilot
+We monitor ${platformList} reviews and draft brand-safe AI responses automatically.
+Customer monitoring: ${platformList}
+Listing URLs:\n${urls || "Not provided"}`;
+  },
+
+  2: (d) => `Service: Appointment No-Show Reducer
+Industry: ${d.industry || "Not specified"}
+Scheduling software: ${d.schedulingSoftware || "Not specified"}
+Business phone: ${d.businessPhone || "Not provided"}
+Monthly appointments: ${d.monthlyAppointments || "Not specified"}
+Estimated no-show rate: ${d.estimatedNoShowRate || "Unknown"}%
+We send smart SMS reminders, collect confirmations, auto-reschedule cancellations, and fill gaps from a waitlist.`,
+
+  3: (d) => {
+    const postingPlatforms = (d.postingPlatforms as string[]) || [];
+    return `Service: AI Short-Form Clip Factory
+Content type: ${d.contentType || "Not specified"}
+Posting platforms: ${postingPlatforms.join(", ") || "Not specified"}
+Content URL: ${d.contentUrl || "Not provided"}
+Average episode length: ${d.avgEpisodeLength || "Not specified"}
+Desired clips/week: ${d.clipsPerWeek || "Not specified"}
+We convert long-form videos/podcasts into ready-to-post vertical clips with hooks, captions, and platform-specific formatting.`;
+  },
+
+  4: (d) => {
+    const leadSources = (d.leadSources as string[]) || [];
+    return `Service: Local Lead Response Copilot
+Industry: ${d.industry || "Not specified"}
+Lead sources: ${leadSources.join(", ") || "Not specified"}
+Business phone: ${d.businessPhone || "Not provided"}
+Average deal value: $${d.avgDealValue || "Not specified"}
+Calendar/booking URL: ${d.calendarUrl || "Not provided"}
+We instantly text new leads, qualify them with AI-driven questions, and book calls/appointments automatically.`;
+  },
+
+  5: (d) => `Service: Etsy/Shopify Listing Optimizer & SEO Auditor
+E-commerce platform: ${d.ecommercePlatform || "Not specified"}
+Store URL: ${d.storeUrl || "Not provided"}
+Active listings: ${d.activeListings || "Not specified"}
+Product category: ${d.productCategory || "Not specified"}
+Monthly revenue range: ${d.monthlyRevenue || "Not specified"}
+We audit product listings (titles, tags, descriptions, images), generate optimized variants, create A/B test plans, and deliver weekly ranking reports.`,
+};
+
 router.post("/", async (req, res) => {
   const businessId = parseInt(req.params.businessId);
   if (isNaN(businessId)) {
@@ -25,39 +79,28 @@ router.post("/", async (req, res) => {
     return;
   }
 
-  const { fullName, email, businessName, platforms, googleListingUrl, yelpListingUrl, planName, paymentMethod: rawPaymentMethod } = req.body;
+  const { fullName, email, businessName, platforms, googleListingUrl, yelpListingUrl, planName, paymentMethod: rawPaymentMethod, metadata: rawMetadata } = req.body;
   const paymentMethod = ["stripe", "paypal", "zelle"].includes(rawPaymentMethod) ? rawPaymentMethod : "stripe";
+  const metadata = rawMetadata && typeof rawMetadata === "object" ? rawMetadata : {};
 
   if (!fullName || !email || !businessName) {
     res.status(400).json({ error: "fullName, email, and businessName are required" });
     return;
   }
 
-  if (!Array.isArray(platforms) || platforms.length === 0) {
-    res.status(400).json({ error: "At least one platform must be selected" });
-    return;
-  }
-
-  if (platforms.includes("Google") && !googleListingUrl) {
-    res.status(400).json({ error: "Google Business listing URL is required when Google is selected" });
-    return;
-  }
-
-  if (platforms.includes("Yelp") && !yelpListingUrl) {
-    res.status(400).json({ error: "Yelp listing URL is required when Yelp is selected" });
-    return;
-  }
+  const effectivePlatforms = Array.isArray(platforms) ? platforms : (Array.isArray(metadata.platforms) ? metadata.platforms : []);
 
   const [signup] = await db.insert(signupsTable).values({
     fullName,
     email,
     businessName,
-    platforms,
-    googleListingUrl: googleListingUrl ?? null,
-    yelpListingUrl: yelpListingUrl ?? null,
+    platforms: effectivePlatforms,
+    googleListingUrl: googleListingUrl ?? metadata.googleListingUrl ?? null,
+    yelpListingUrl: yelpListingUrl ?? metadata.yelpListingUrl ?? null,
     planName: planName ?? null,
     businessId: String(businessId),
     paymentMethod,
+    metadata,
     onboardingTriggered: false,
   }).returning();
 
@@ -71,7 +114,7 @@ router.post("/", async (req, res) => {
       const stripeCustomer = await stripe.customers.create({
         name: fullName,
         email,
-        metadata: { businessName, platforms: platforms.join(",") },
+        metadata: { businessName, businessId: String(businessId) },
       });
       stripeCustomerId = stripeCustomer.id;
       logger.info({ stripeCustomerId, email }, "Stripe customer created during signup");
@@ -84,9 +127,11 @@ router.post("/", async (req, res) => {
     name: fullName,
     email,
     businessName,
-    platforms,
-    googleUrl: googleListingUrl ?? null,
-    yelpUrl: yelpListingUrl ?? null,
+    businessId: String(businessId),
+    platforms: effectivePlatforms,
+    googleUrl: googleListingUrl ?? metadata.googleListingUrl ?? null,
+    yelpUrl: yelpListingUrl ?? metadata.yelpListingUrl ?? null,
+    metadata,
     stripeCustomerId,
     paymentMethod,
     subscriptionStatus: "trial",
@@ -94,7 +139,7 @@ router.post("/", async (req, res) => {
     trialEndAt,
   }).returning();
 
-  logger.info({ customerId: customer.id, signupId: signup.id, paymentMethod }, "Customer record created from signup");
+  logger.info({ customerId: customer.id, signupId: signup.id, paymentMethod, businessId }, "Customer record created from signup");
 
   let paymentData: Record<string, unknown> = {};
 
@@ -166,26 +211,32 @@ router.post("/", async (req, res) => {
       return;
     }
 
-    const platformList = platforms.join(" and ");
-    const planContext = planName ? ` They selected the ${planName} plan.` : "";
-    const platformContext = [
-      platforms.includes("Google") && googleListingUrl ? `Google Business: ${googleListingUrl}` : null,
-      platforms.includes("Yelp") && yelpListingUrl ? `Yelp: ${yelpListingUrl}` : null,
-    ].filter(Boolean).join("\n");
+    const allData: Record<string, unknown> = { fullName, email, businessName, ...metadata };
+    if (effectivePlatforms.length > 0) allData.platforms = effectivePlatforms;
+    if (googleListingUrl) allData.googleListingUrl = googleListingUrl;
+    if (yelpListingUrl) allData.yelpListingUrl = yelpListingUrl;
 
-    const prompt = `You are a professional email copywriter for an AI Review Reply & Reputation Autopilot service. Generate a 3-email onboarding sequence for a new customer.
+    const contextBuilder = BUSINESS_ONBOARDING_PROMPTS[businessId];
+    const serviceContext = contextBuilder
+      ? contextBuilder(allData)
+      : `Service: ${business.name}\nDescription: ${business.description}`;
+
+    const planContext = planName ? `\nSelected plan: ${planName}` : "";
+
+    const prompt = `You are a professional email copywriter. Generate a 3-email onboarding sequence for a new customer who just signed up.
 
 New Customer: ${fullName}
 Business: ${businessName}
-Email: ${email}
-Monitoring Platforms: ${platformList}${planContext}
-Listing URLs:
-${platformContext}
+Email: ${email}${planContext}
+
+${serviceContext}
 
 Create 3 emails:
-1. Immediate welcome email (sent now) - warm, personal, confirms we received their info, tells them what to expect next
-2. Value proposition follow-up (sent in 2 days) - explains how the AI review reply system works, benefits for ${platformList} reviews
-3. Call-to-action email (sent in 5 days) - encourages them to reach out with questions, share testimonials, get more value
+1. Immediate welcome email (sent now) - warm, personal, confirms what we received, tells them what to expect in the next 7 days of their free trial
+2. Value proposition follow-up (sent in 2 days) - explains how the service works specifically for their setup, showcases key benefits, shares a quick-win tip they can use right away
+3. Trial check-in email (sent in 5 days) - asks how things are going, highlights results they should be seeing, gently reminds them the trial converts in 2 days
+
+Sign off as the "${business.name} Team".
 
 Respond with ONLY valid JSON array:
 [
@@ -269,7 +320,7 @@ Respond with ONLY valid JSON array:
       .set({ onboardingTriggered: true, updatedAt: new Date() })
       .where(eq(signupsTable.id, signup.id));
 
-    logger.info({ signupId: signup.id, sequenceCount: generatedEmails.length, welcomeSent }, "Onboarding sequence saved for new signup");
+    logger.info({ signupId: signup.id, sequenceCount: generatedEmails.length, welcomeSent, businessId }, "Onboarding sequence saved for new signup");
 
     res.json({ success: true, signupId: signup.id, customerId: customer.id, paymentMethod, paymentData, onboardingTriggered: true });
   } catch (err) {

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { X, Check, Loader2, ArrowRight, CreditCard, DollarSign, Copy, ArrowLeft } from "lucide-react";
+import { getOnboardingConfig, type OnboardingField } from "../lib/onboarding-configs";
 
 interface SignupModalProps {
   isOpen: boolean;
@@ -9,34 +10,22 @@ interface SignupModalProps {
   accentColor?: string;
 }
 
-interface FormState {
-  fullName: string;
-  email: string;
-  businessName: string;
-  platforms: string[];
-  googleListingUrl: string;
-  yelpListingUrl: string;
-}
-
 type PaymentMethodType = "stripe" | "paypal" | "zelle";
 type ModalStep = "details" | "payment" | "submitted" | "zelle-info";
 
-const initialForm: FormState = {
-  fullName: "",
-  email: "",
-  businessName: "",
-  platforms: [],
-  googleListingUrl: "",
-  yelpListingUrl: "",
-};
-
 export function SignupModal({ isOpen, onClose, planName, businessId, accentColor = "#6366f1" }: SignupModalProps) {
-  const [form, setForm] = useState<FormState>(initialForm);
+  const [formData, setFormData] = useState<Record<string, string | string[]>>({
+    fullName: "",
+    email: "",
+    businessName: "",
+  });
   const [step, setStep] = useState<ModalStep>("details");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [zelleInfo, setZelleInfo] = useState<{ email: string; phone: string } | null>(null);
   const [copiedField, setCopiedField] = useState<string | null>(null);
+
+  const config = businessId ? getOnboardingConfig(businessId) : null;
 
   if (!isOpen) return null;
 
@@ -44,18 +33,9 @@ export function SignupModal({ isOpen, onClose, planName, businessId, accentColor
     if (e.target === e.currentTarget) handleClose();
   };
 
-  const togglePlatform = (platform: string) => {
-    setForm(prev => ({
-      ...prev,
-      platforms: prev.platforms.includes(platform)
-        ? prev.platforms.filter(p => p !== platform)
-        : [...prev.platforms, platform],
-    }));
-  };
-
   const handleClose = () => {
     if (!isSubmitting) {
-      setForm(initialForm);
+      setFormData({ fullName: "", email: "", businessName: "" });
       setStep("details");
       setError(null);
       setZelleInfo(null);
@@ -64,27 +44,47 @@ export function SignupModal({ isOpen, onClose, planName, businessId, accentColor
     }
   };
 
+  const setField = (key: string, value: string | string[]) => {
+    setFormData(prev => ({ ...prev, [key]: value }));
+  };
+
+  const toggleCheckbox = (key: string, value: string) => {
+    const current = (formData[key] as string[] | undefined) ?? [];
+    setField(key, current.includes(value) ? current.filter(v => v !== value) : [...current, value]);
+  };
+
+  const isFieldVisible = (field: OnboardingField): boolean => {
+    if (!field.conditionalOn) return true;
+    const parentVal = formData[field.conditionalOn.field];
+    if (Array.isArray(parentVal)) return parentVal.includes(field.conditionalOn.value);
+    return parentVal === field.conditionalOn.value;
+  };
+
+  const validateDetails = (): string | null => {
+    const name = (formData.fullName as string || "").trim();
+    const email = (formData.email as string || "").trim();
+    const biz = (formData.businessName as string || "").trim();
+    if (!name || !email || !biz) return "Please fill in all required fields.";
+
+    if (config) {
+      for (const field of config.fields) {
+        if (!field.required || !isFieldVisible(field)) continue;
+        const val = formData[field.key];
+        if (field.type === "checkbox-group") {
+          if (!Array.isArray(val) || val.length === 0) return `Please select at least one option for "${field.label}".`;
+        } else {
+          if (!val || (typeof val === "string" && !val.trim())) return `"${field.label}" is required.`;
+        }
+      }
+    }
+    return null;
+  };
+
   const handleDetailsSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
-
-    if (!form.fullName.trim() || !form.email.trim() || !form.businessName.trim()) {
-      setError("Please fill in all required fields.");
-      return;
-    }
-    if (form.platforms.length === 0) {
-      setError("Please select at least one platform to monitor.");
-      return;
-    }
-    if (form.platforms.includes("Google") && !form.googleListingUrl.trim()) {
-      setError("Please enter your Google Business listing URL.");
-      return;
-    }
-    if (form.platforms.includes("Yelp") && !form.yelpListingUrl.trim()) {
-      setError("Please enter your Yelp business listing URL.");
-      return;
-    }
-
+    const validationError = validateDetails();
+    if (validationError) { setError(validationError); return; }
     setStep("payment");
   };
 
@@ -99,19 +99,29 @@ export function SignupModal({ isOpen, onClose, planName, businessId, accentColor
         return;
       }
 
+      const { fullName, email, businessName, ...rest } = formData;
+      const metadata: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(rest)) {
+        if (v !== undefined && v !== "" && (!Array.isArray(v) || v.length > 0)) metadata[k] = v;
+      }
+
+      const body: Record<string, unknown> = {
+        fullName: (fullName as string).trim(),
+        email: (email as string).trim(),
+        businessName: (businessName as string).trim(),
+        planName: planName ?? undefined,
+        paymentMethod: method,
+        metadata,
+      };
+
+      if (metadata.platforms) body.platforms = metadata.platforms;
+      if (metadata.googleListingUrl) body.googleListingUrl = metadata.googleListingUrl;
+      if (metadata.yelpListingUrl) body.yelpListingUrl = metadata.yelpListingUrl;
+
       const response = await fetch(`${import.meta.env.BASE_URL}api/businesses/${businessId}/signup`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          fullName: form.fullName.trim(),
-          email: form.email.trim(),
-          businessName: form.businessName.trim(),
-          platforms: form.platforms,
-          googleListingUrl: form.googleListingUrl.trim() || undefined,
-          yelpListingUrl: form.yelpListingUrl.trim() || undefined,
-          planName: planName ?? undefined,
-          paymentMethod: method,
-        }),
+        body: JSON.stringify(body),
       });
 
       if (!response.ok) {
@@ -138,10 +148,7 @@ export function SignupModal({ isOpen, onClose, planName, businessId, accentColor
         } else {
           try {
             const zelleRes = await fetch(`${import.meta.env.BASE_URL}api/customers/zelle/contact-info`);
-            if (zelleRes.ok) {
-              const info = await zelleRes.json();
-              setZelleInfo(info);
-            }
+            if (zelleRes.ok) setZelleInfo(await zelleRes.json());
           } catch {
             setZelleInfo({ email: "payments@example.com", phone: "(555) 123-4567" });
           }
@@ -162,6 +169,83 @@ export function SignupModal({ isOpen, onClose, planName, businessId, accentColor
       setCopiedField(field);
       setTimeout(() => setCopiedField(null), 2000);
     });
+  };
+
+  const renderField = (field: OnboardingField) => {
+    if (!isFieldVisible(field)) return null;
+
+    const fieldKey = field.key;
+    const val = formData[fieldKey];
+
+    if (field.type === "checkbox-group") {
+      const selected = (Array.isArray(val) ? val : []) as string[];
+      return (
+        <div key={fieldKey}>
+          <label className="block text-sm font-semibold text-gray-700 mb-2">
+            {field.label} {field.required && <span className="text-red-500">*</span>}
+          </label>
+          <div className="flex flex-wrap gap-2">
+            {field.options?.map(opt => {
+              const isSelected = selected.includes(opt);
+              return (
+                <button
+                  key={opt}
+                  type="button"
+                  onClick={() => toggleCheckbox(fieldKey, opt)}
+                  className={`py-2 px-4 rounded-lg border-2 font-semibold text-sm transition-all ${
+                    isSelected ? "text-white" : "border-gray-200 text-gray-600 hover:border-gray-300"
+                  }`}
+                  style={isSelected ? { backgroundColor: accentColor, borderColor: accentColor } : {}}
+                >
+                  {isSelected && <Check className="inline h-3.5 w-3.5 mr-1.5" />}
+                  {opt}
+                </button>
+              );
+            })}
+          </div>
+          {field.helpText && <p className="text-xs text-gray-400 mt-1">{field.helpText}</p>}
+        </div>
+      );
+    }
+
+    if (field.type === "select") {
+      return (
+        <div key={fieldKey}>
+          <label className="block text-sm font-semibold text-gray-700 mb-1">
+            {field.label} {field.required && <span className="text-red-500">*</span>}
+          </label>
+          <select
+            value={(val as string) ?? ""}
+            onChange={e => setField(fieldKey, e.target.value)}
+            className="w-full px-4 py-2.5 rounded-lg border border-gray-200 text-gray-900 bg-white focus:outline-none focus:ring-2 text-sm"
+            required={field.required}
+          >
+            <option value="">Select...</option>
+            {field.options?.map(opt => (
+              <option key={opt} value={opt}>{opt}</option>
+            ))}
+          </select>
+          {field.helpText && <p className="text-xs text-gray-400 mt-1">{field.helpText}</p>}
+        </div>
+      );
+    }
+
+    return (
+      <div key={fieldKey}>
+        <label className="block text-sm font-semibold text-gray-700 mb-1">
+          {field.label} {field.required && <span className="text-red-500">*</span>}
+        </label>
+        <input
+          type={field.type}
+          value={(val as string) ?? ""}
+          onChange={e => setField(fieldKey, e.target.value)}
+          placeholder={field.placeholder}
+          className="w-full px-4 py-2.5 rounded-lg border border-gray-200 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 text-sm"
+          required={field.required}
+        />
+        {field.helpText && <p className="text-xs text-gray-400 mt-1">{field.helpText}</p>}
+      </div>
+    );
   };
 
   return (
@@ -190,10 +274,10 @@ export function SignupModal({ isOpen, onClose, planName, businessId, accentColor
               </div>
               <h2 className="text-2xl font-black text-gray-900 mb-3">You're all set!</h2>
               <p className="text-gray-500 text-base leading-relaxed mb-2">
-                Thanks, <strong>{form.fullName.split(" ")[0]}</strong>! We've received your information and will be in touch shortly.
+                Thanks, <strong>{((formData.fullName as string) || "").split(" ")[0]}</strong>! We've received your information and will be in touch shortly.
               </p>
               <p className="text-gray-400 text-sm leading-relaxed mb-8">
-                Check your inbox at <strong>{form.email}</strong> for a welcome email with next steps.
+                Check your inbox at <strong>{formData.email as string}</strong> for a welcome email with next steps.
               </p>
               <button
                 onClick={handleClose}
@@ -252,7 +336,7 @@ export function SignupModal({ isOpen, onClose, planName, businessId, accentColor
 
               <div className="bg-blue-50 border border-blue-200 rounded-lg px-4 py-3 mb-6">
                 <p className="text-xs text-blue-700">
-                  After sending, we'll verify your payment and activate your account. You'll receive a confirmation email at <strong>{form.email}</strong>.
+                  After sending, we'll verify your payment and activate your account. You'll receive a confirmation email at <strong>{formData.email as string}</strong>.
                 </p>
               </div>
 
@@ -337,9 +421,11 @@ export function SignupModal({ isOpen, onClose, planName, businessId, accentColor
           {step === "details" && (
             <>
               <div className="mb-6">
-                <h2 className="text-2xl font-black text-gray-900 mb-1">Get Started{planName ? ` — ${planName}` : ""}</h2>
+                <h2 className="text-2xl font-black text-gray-900 mb-1">
+                  Get Started{planName ? ` — ${planName}` : ""}
+                </h2>
                 <p className="text-gray-500 text-sm">
-                  Fill in the details below and we'll get your AI Review Autopilot set up.
+                  {config?.subtitle ?? "Fill in the details below and we'll get you set up."}
                 </p>
               </div>
 
@@ -348,11 +434,10 @@ export function SignupModal({ isOpen, onClose, planName, businessId, accentColor
                   <label className="block text-sm font-semibold text-gray-700 mb-1">Full Name <span className="text-red-500">*</span></label>
                   <input
                     type="text"
-                    value={form.fullName}
-                    onChange={e => setForm(prev => ({ ...prev, fullName: e.target.value }))}
+                    value={(formData.fullName as string) ?? ""}
+                    onChange={e => setField("fullName", e.target.value)}
                     placeholder="Jane Smith"
                     className="w-full px-4 py-2.5 rounded-lg border border-gray-200 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 text-sm"
-                    style={{ ["--tw-ring-color" as string]: accentColor }}
                     required
                   />
                 </div>
@@ -361,8 +446,8 @@ export function SignupModal({ isOpen, onClose, planName, businessId, accentColor
                   <label className="block text-sm font-semibold text-gray-700 mb-1">Email Address <span className="text-red-500">*</span></label>
                   <input
                     type="email"
-                    value={form.email}
-                    onChange={e => setForm(prev => ({ ...prev, email: e.target.value }))}
+                    value={(formData.email as string) ?? ""}
+                    onChange={e => setField("email", e.target.value)}
                     placeholder="jane@yourbusiness.com"
                     className="w-full px-4 py-2.5 rounded-lg border border-gray-200 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 text-sm"
                     required
@@ -370,67 +455,20 @@ export function SignupModal({ isOpen, onClose, planName, businessId, accentColor
                 </div>
 
                 <div>
-                  <label className="block text-sm font-semibold text-gray-700 mb-1">Business Name <span className="text-red-500">*</span></label>
+                  <label className="block text-sm font-semibold text-gray-700 mb-1">
+                    {config?.businessNameLabel ?? "Business Name"} <span className="text-red-500">*</span>
+                  </label>
                   <input
                     type="text"
-                    value={form.businessName}
-                    onChange={e => setForm(prev => ({ ...prev, businessName: e.target.value }))}
-                    placeholder="Sunshine Bakery"
+                    value={(formData.businessName as string) ?? ""}
+                    onChange={e => setField("businessName", e.target.value)}
+                    placeholder={config?.businessNamePlaceholder ?? "Your Business"}
                     className="w-full px-4 py-2.5 rounded-lg border border-gray-200 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 text-sm"
                     required
                   />
                 </div>
 
-                <div>
-                  <label className="block text-sm font-semibold text-gray-700 mb-2">Platforms to Monitor <span className="text-red-500">*</span></label>
-                  <div className="flex gap-3">
-                    {["Google", "Yelp"].map(platform => {
-                      const selected = form.platforms.includes(platform);
-                      return (
-                        <button
-                          key={platform}
-                          type="button"
-                          onClick={() => togglePlatform(platform)}
-                          className={`flex-1 py-2.5 px-4 rounded-lg border-2 font-semibold text-sm transition-all ${
-                            selected ? "text-white" : "border-gray-200 text-gray-600 hover:border-gray-300"
-                          }`}
-                          style={selected ? { backgroundColor: accentColor, borderColor: accentColor } : {}}
-                        >
-                          {selected && <Check className="inline h-3.5 w-3.5 mr-1.5" />}
-                          {platform} Reviews
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                {form.platforms.includes("Google") && (
-                  <div>
-                    <label className="block text-sm font-semibold text-gray-700 mb-1">Google Business Listing URL <span className="text-red-500">*</span></label>
-                    <input
-                      type="url"
-                      value={form.googleListingUrl}
-                      onChange={e => setForm(prev => ({ ...prev, googleListingUrl: e.target.value }))}
-                      placeholder="https://maps.google.com/maps?..."
-                      className="w-full px-4 py-2.5 rounded-lg border border-gray-200 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 text-sm"
-                      required
-                    />
-                  </div>
-                )}
-
-                {form.platforms.includes("Yelp") && (
-                  <div>
-                    <label className="block text-sm font-semibold text-gray-700 mb-1">Yelp Business Listing URL <span className="text-red-500">*</span></label>
-                    <input
-                      type="url"
-                      value={form.yelpListingUrl}
-                      onChange={e => setForm(prev => ({ ...prev, yelpListingUrl: e.target.value }))}
-                      placeholder="https://www.yelp.com/biz/..."
-                      className="w-full px-4 py-2.5 rounded-lg border border-gray-200 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 text-sm"
-                      required
-                    />
-                  </div>
-                )}
+                {config?.fields.map(field => renderField(field))}
 
                 {error && (
                   <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3 text-red-700 text-sm">
