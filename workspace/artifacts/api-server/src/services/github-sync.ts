@@ -3,7 +3,6 @@ import { createHash } from "crypto";
 import { readFileSync, readdirSync, statSync } from "fs";
 import { join, relative } from "path";
 import { db, businessArtifactsTable, businessesTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
 import { logger } from "../lib/logger";
 
 const SYNC_INTERVAL_MS = 60 * 60 * 1000;
@@ -17,6 +16,7 @@ const SKIP_DIRS = new Set([
   ".cache",
   "coverage",
   ".turbo",
+  ".pnpm-store",
 ]);
 
 const SKIP_EXTENSIONS = new Set([".map", ".log"]);
@@ -53,18 +53,25 @@ function slugify(text: string): string {
     .slice(0, 80);
 }
 
+function githubBlobSha(content: Buffer): string {
+  const header = `blob ${content.length}\0`;
+  const hash = createHash("sha1");
+  hash.update(Buffer.from(header, "binary"));
+  hash.update(content);
+  return hash.digest("hex");
+}
+
 function collectSourceFiles(rootDir: string): Map<string, Buffer> {
   const files = new Map<string, Buffer>();
 
   function walk(dir: string) {
-    let entries: ReturnType<typeof readdirSync>;
+    let entries: string[];
     try {
-      entries = readdirSync(dir);
+      entries = readdirSync(dir) as string[];
     } catch {
       return;
     }
     for (const entry of entries) {
-      if (entry.startsWith(".") && entry !== ".replit") continue;
       const fullPath = join(dir, entry);
       let stat;
       try {
@@ -92,10 +99,6 @@ function collectSourceFiles(rootDir: string): Map<string, Buffer> {
 
   walk(rootDir);
   return files;
-}
-
-function hashContent(buf: Buffer): string {
-  return createHash("sha256").update(buf).digest("hex");
 }
 
 async function buildGeneratedArtifacts(): Promise<Map<string, Buffer>> {
@@ -135,13 +138,14 @@ async function buildGeneratedArtifacts(): Promise<Map<string, Buffer>> {
   return files;
 }
 
-const lastHashes = new Map<string, string>();
+const lastBlobShas = new Map<string, string>();
+let baselineLoaded = false;
 
 async function githubRequest(
   connectors: ReplitConnectors,
   path: string,
   options: { method: string; body?: unknown }
-): Promise<unknown> {
+): Promise<{ ok: boolean; status: number; json: () => Promise<unknown> }> {
   const res = await connectors.proxy("github", path, {
     method: options.method,
     headers: { "Content-Type": "application/json" },
@@ -155,7 +159,75 @@ async function githubRequest(
       `GitHub API ${options.method} ${path} failed (${res.status}): ${JSON.stringify(data)}`
     );
   }
-  return data;
+  return { ok: res.ok, status: res.status, json: async () => data };
+}
+
+async function githubGet<T>(connectors: ReplitConnectors, path: string): Promise<T> {
+  const res = await githubRequest(connectors, path, { method: "GET" });
+  return res.json() as Promise<T>;
+}
+
+async function githubPost<T>(connectors: ReplitConnectors, path: string, body: unknown): Promise<T> {
+  const res = await githubRequest(connectors, path, { method: "POST", body });
+  return res.json() as Promise<T>;
+}
+
+async function githubPatch<T>(connectors: ReplitConnectors, path: string, body: unknown): Promise<T> {
+  const res = await githubRequest(connectors, path, { method: "PATCH", body });
+  return res.json() as Promise<T>;
+}
+
+async function loadBaseline(
+  connectors: ReplitConnectors,
+  owner: string,
+  repoName: string
+): Promise<void> {
+  try {
+    const repoData = await githubGet<{ default_branch: string }>(
+      connectors,
+      `/repos/${owner}/${repoName}`
+    );
+    const branch = repoData.default_branch;
+
+    const refData = await githubGet<{ object: { sha: string } }>(
+      connectors,
+      `/repos/${owner}/${repoName}/git/ref/heads/${branch}`
+    );
+
+    const commitData = await githubGet<{ tree: { sha: string } }>(
+      connectors,
+      `/repos/${owner}/${repoName}/git/commits/${refData.object.sha}`
+    );
+
+    const treeData = await githubGet<{
+      tree: Array<{ path: string; type: string; sha: string }>;
+      truncated: boolean;
+    }>(
+      connectors,
+      `/repos/${owner}/${repoName}/git/trees/${commitData.tree.sha}?recursive=1`
+    );
+
+    lastBlobShas.clear();
+    for (const item of treeData.tree) {
+      if (item.type === "blob") {
+        lastBlobShas.set(item.path, item.sha);
+      }
+    }
+
+    if (treeData.truncated) {
+      logger.warn("GitHub sync: baseline tree was truncated — will reprocess all files this run");
+    } else {
+      logger.info(
+        { count: lastBlobShas.size },
+        "GitHub sync: loaded baseline from existing repo tree"
+      );
+    }
+
+    baselineLoaded = true;
+  } catch (err) {
+    logger.warn({ err }, "GitHub sync: could not load baseline, will treat all files as new");
+    baselineLoaded = true;
+  }
 }
 
 async function runSync() {
@@ -172,123 +244,111 @@ async function runSync() {
     const connectors = new ReplitConnectors();
     const [owner, repoName] = repo.split("/");
 
-    const repoRoot = process.cwd().includes("artifacts/api-server")
-      ? join(process.cwd(), "../../..")
-      : join(process.cwd());
+    if (!baselineLoaded) {
+      await loadBaseline(connectors, owner, repoName);
+    }
 
+    const repoRoot = join(process.cwd(), "..", "..", "..");
     const sourceFiles = collectSourceFiles(repoRoot);
     const generatedFiles = await buildGeneratedArtifacts();
-
     const allFiles = new Map<string, Buffer>([...sourceFiles, ...generatedFiles]);
 
-    const changed: Map<string, Buffer> = new Map();
-    for (const [path, content] of allFiles) {
-      const hash = hashContent(content);
-      if (lastHashes.get(path) !== hash) {
-        changed.set(path, content);
+    const changedOrNew: Map<string, Buffer> = new Map();
+    for (const [filePath, content] of allFiles) {
+      const localSha = githubBlobSha(content);
+      if (lastBlobShas.get(filePath) !== localSha) {
+        changedOrNew.set(filePath, content);
       }
     }
 
-    if (changed.size === 0) {
+    const deletedPaths: string[] = [];
+    for (const trackedPath of lastBlobShas.keys()) {
+      if (!allFiles.has(trackedPath)) {
+        deletedPaths.push(trackedPath);
+      }
+    }
+
+    if (changedOrNew.size === 0 && deletedPaths.length === 0) {
       logger.info("GitHub sync: nothing changed, skipping");
       syncStatus.status = "skipped";
       syncStatus.lastSyncAt = new Date().toISOString();
       return;
     }
 
-    const repoData = (await githubRequest(connectors, `/repos/${owner}/${repoName}`, {
-      method: "GET",
-    })) as { default_branch: string };
+    const repoData = await githubGet<{ default_branch: string }>(
+      connectors,
+      `/repos/${owner}/${repoName}`
+    );
     const defaultBranch = repoData.default_branch;
 
-    const refData = (await githubRequest(
+    const refData = await githubGet<{ object: { sha: string } }>(
       connectors,
-      `/repos/${owner}/${repoName}/git/ref/heads/${defaultBranch}`,
-      { method: "GET" }
-    )) as { object: { sha: string } };
+      `/repos/${owner}/${repoName}/git/ref/heads/${defaultBranch}`
+    );
     const headSha = refData.object.sha;
 
-    const commitData = (await githubRequest(
+    const commitData = await githubGet<{ tree: { sha: string } }>(
       connectors,
-      `/repos/${owner}/${repoName}/git/commits/${headSha}`,
-      { method: "GET" }
-    )) as { tree: { sha: string } };
+      `/repos/${owner}/${repoName}/git/commits/${headSha}`
+    );
     const baseTreeSha = commitData.tree.sha;
 
     const treeItems: Array<{
       path: string;
       mode: string;
       type: string;
-      sha: string;
+      sha: string | null;
     }> = [];
 
-    for (const [filePath, content] of changed) {
-      const blobData = (await githubRequest(
+    for (const [filePath, content] of changedOrNew) {
+      const blobData = await githubPost<{ sha: string }>(
         connectors,
         `/repos/${owner}/${repoName}/git/blobs`,
-        {
-          method: "POST",
-          body: {
-            content: content.toString("base64"),
-            encoding: "base64",
-          },
-        }
-      )) as { sha: string };
-
-      treeItems.push({
-        path: filePath,
-        mode: "100644",
-        type: "blob",
-        sha: blobData.sha,
-      });
+        { content: content.toString("base64"), encoding: "base64" }
+      );
+      treeItems.push({ path: filePath, mode: "100644", type: "blob", sha: blobData.sha });
     }
 
-    const treeData = (await githubRequest(
+    for (const filePath of deletedPaths) {
+      treeItems.push({ path: filePath, mode: "100644", type: "blob", sha: null });
+    }
+
+    const treeData = await githubPost<{ sha: string }>(
       connectors,
       `/repos/${owner}/${repoName}/git/trees`,
-      {
-        method: "POST",
-        body: { base_tree: baseTreeSha, tree: treeItems },
-      }
-    )) as { sha: string };
+      { base_tree: baseTreeSha, tree: treeItems }
+    );
 
     const now = new Date();
     const utcStr = now.toISOString().slice(0, 16).replace("T", " ") + " UTC";
-    const sourceCount = [...changed.keys()].filter(
+    const sourceChangedCount = [...changedOrNew.keys()].filter(
       (p) => !p.startsWith("generated/")
-    ).length;
-    const artifactCount = [...changed.keys()].filter((p) =>
+    ).length + deletedPaths.filter((p) => !p.startsWith("generated/")).length;
+    const artifactChangedCount = [...changedOrNew.keys()].filter((p) =>
       p.startsWith("generated/")
-    ).length;
+    ).length + deletedPaths.filter((p) => p.startsWith("generated/")).length;
 
     const commitMessage =
       `chore: auto-sync [${utcStr}] — ` +
-      `${sourceCount} source files, ${artifactCount} artifacts`;
+      `${sourceChangedCount} source files, ${artifactChangedCount} artifacts`;
 
-    const newCommitData = (await githubRequest(
+    const newCommitData = await githubPost<{ sha: string }>(
       connectors,
       `/repos/${owner}/${repoName}/git/commits`,
-      {
-        method: "POST",
-        body: {
-          message: commitMessage,
-          tree: treeData.sha,
-          parents: [headSha],
-        },
-      }
-    )) as { sha: string; html_url: string };
-
-    await githubRequest(
-      connectors,
-      `/repos/${owner}/${repoName}/git/refs/heads/${defaultBranch}`,
-      {
-        method: "PATCH",
-        body: { sha: newCommitData.sha, force: false },
-      }
+      { message: commitMessage, tree: treeData.sha, parents: [headSha] }
     );
 
-    for (const [path, content] of changed) {
-      lastHashes.set(path, hashContent(content));
+    await githubPatch<unknown>(
+      connectors,
+      `/repos/${owner}/${repoName}/git/refs/heads/${defaultBranch}`,
+      { sha: newCommitData.sha, force: false }
+    );
+
+    for (const [filePath, content] of changedOrNew) {
+      lastBlobShas.set(filePath, githubBlobSha(content));
+    }
+    for (const filePath of deletedPaths) {
+      lastBlobShas.delete(filePath);
     }
 
     syncStatus = {
@@ -296,12 +356,8 @@ async function runSync() {
       status: "success",
       commitUrl: `https://github.com/${owner}/${repoName}/commit/${newCommitData.sha}`,
       commitMessage,
-      artifactsCount: [...allFiles.keys()].filter((p) =>
-        p.startsWith("generated/")
-      ).length,
-      sourceFilesCount: [...allFiles.keys()].filter(
-        (p) => !p.startsWith("generated/")
-      ).length,
+      artifactsCount: [...allFiles.keys()].filter((p) => p.startsWith("generated/")).length,
+      sourceFilesCount: [...allFiles.keys()].filter((p) => !p.startsWith("generated/")).length,
       errorMessage: null,
     };
 
