@@ -59,6 +59,10 @@ pnpm workspace monorepo using TypeScript. Each package manages its own dependenc
   - `POST /skills/install` — Install a skill by GitHub source (fetches SKILL.md)
   - `PATCH /skills/:id` — Toggle skill status (active/disabled)
   - `DELETE /skills/:id` — Remove a skill
+  - `GET /businesses/:id/knowledge-base` — List all KB entries for a business
+  - `POST /businesses/:id/knowledge-base/upload` — Upload a file (PDF, DOCX, TXT) to the KB; text is extracted asynchronously
+  - `POST /businesses/:id/knowledge-base/url` — Add a URL to the KB; content is crawled asynchronously
+  - `DELETE /businesses/:id/knowledge-base/:entryId` — Delete a KB entry
 
 ## Database Schema (PostgreSQL via Drizzle)
 
@@ -70,6 +74,15 @@ pnpm workspace monorepo using TypeScript. Each package manages its own dependenc
 - `outreach_emails` — Log of emails sent/received via AgentMail per business
 - `skills` — Dynamic skills (SKILL.md packages from GitHub) with name, slug, source, content, status (active/disabled), businessId (null = global)
 - `ceo_reviews` — CEO operating assessments per business (mode, oneMetric, runwayStatus, topPriority, weeklyRevenueTarget, taskDirectives JSON)
+- `knowledge_base_entries` — Customer-specific knowledge base with entryType (file|url), sourceName, sourceUrl, rawText, status (processing|ready|error), errorMessage
+
+## Knowledge Base System
+
+Enables operators to ground AI reply suggestions in business-specific content:
+- **File upload**: Accepts PDF (via pdf-parse), DOCX (via mammoth), TXT files up to 20 MB; text extracted asynchronously after 201 response
+- **URL ingestion**: Crawls websites via axios + cheerio, strips navigation/scripts, saves up to 100k chars of plain text; processed asynchronously
+- **AI integration**: Before generating email replies in `monitorInboxes()`, top-3 relevant KB entries are keyword-scored against the inbound message and injected into the OpenAI prompt
+- **Mission Control UI**: "Knowledge Base" tab on business detail page with URL input, file upload widget, entry list with type badge / status chip / source name / delete button; status auto-refreshes every 5s
 
 ## AI Integration
 
