@@ -9,6 +9,8 @@ import { startGithubSync } from "./services/github-sync";
 import { provisionMissingInboxes } from "./services/email-provisioner";
 import { startTrialExpiryScheduler } from "./services/trial-expiry";
 import { handleStripeEvent } from "./services/stripe-sync";
+import { handlePayPalWebhookEvent } from "./services/paypal-sync";
+import { isPayPalConfigured, ensureProductAndPlan } from "./lib/paypalClient";
 
 const app: Express = express();
 
@@ -72,6 +74,41 @@ app.post(
   }
 );
 
+app.post(
+  "/api/paypal/webhook",
+  express.json(),
+  async (req, res) => {
+    try {
+      const event = req.body as { event_type: string; resource: Record<string, unknown> };
+      if (!event.event_type) {
+        res.status(400).json({ error: "Invalid webhook payload" });
+        return;
+      }
+
+      const webhookId = process.env.PAYPAL_WEBHOOK_ID;
+      if (webhookId) {
+        const { verifyWebhookSignature } = await import("./lib/paypalClient");
+        const headers = req.headers as Record<string, string>;
+        const rawBody = JSON.stringify(req.body);
+        const isValid = await verifyWebhookSignature(headers, rawBody, webhookId);
+        if (!isValid) {
+          logger.warn("PayPal webhook: signature verification failed");
+          res.status(401).json({ error: "Invalid webhook signature" });
+          return;
+        }
+      } else {
+        logger.warn("PayPal webhook: PAYPAL_WEBHOOK_ID not set, skipping signature verification");
+      }
+
+      await handlePayPalWebhookEvent(event.event_type, event.resource ?? {});
+      res.status(200).json({ received: true });
+    } catch (error) {
+      logger.error({ error }, "PayPal webhook error");
+      res.status(400).json({ error: "Webhook processing error" });
+    }
+  }
+);
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -84,6 +121,7 @@ startTrialExpiryScheduler();
 provisionMissingInboxes().catch(err => logger.error({ err }, "Failed to run startup inbox provisioner"));
 
 initStripe().catch(err => logger.error({ err }, "Stripe initialization failed (non-fatal)"));
+initPayPal().catch(err => logger.error({ err }, "PayPal initialization failed (non-fatal)"));
 
 async function initStripe() {
   try {
@@ -113,6 +151,19 @@ async function initStripe() {
     });
   } catch (err) {
     logger.error({ err }, "Stripe init error");
+  }
+}
+
+async function initPayPal() {
+  if (!isPayPalConfigured()) {
+    logger.info("PayPal not configured (PAYPAL_CLIENT_ID / PAYPAL_CLIENT_SECRET not set) — skipping initialization");
+    return;
+  }
+  try {
+    const { productId, planId } = await ensureProductAndPlan();
+    logger.info({ productId, planId }, "PayPal product and weekly plan ready");
+  } catch (err) {
+    logger.error({ err }, "PayPal init error");
   }
 }
 

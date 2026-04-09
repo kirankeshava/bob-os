@@ -1221,22 +1221,6 @@ export default function BusinessDetail() {
         <div><p className="text-[10px] text-muted-foreground uppercase font-mono mb-0.5">Rank</p><p className="font-semibold text-sm">{business.rank} / 5</p></div>
       </div>
 
-      {/* Performance Link */}
-      <Link to={`/businesses/${businessId}/performance`}>
-        <Card className="border-emerald-500/20 bg-emerald-950/10 hover:border-emerald-500/40 transition-colors cursor-pointer group">
-          <CardContent className="p-3 flex items-center gap-3">
-            <div className="p-2 rounded-lg bg-emerald-500/15 border border-emerald-500/30">
-              <BarChart2 className="h-4 w-4 text-emerald-400" />
-            </div>
-            <div className="flex-1">
-              <p className="text-xs font-bold font-mono uppercase text-emerald-400">Performance</p>
-              <p className="text-[10px] text-muted-foreground">Revenue, growth, customer feedback &amp; competitive position</p>
-            </div>
-            <ChevronRight className="h-4 w-4 text-emerald-400/60 group-hover:text-emerald-400 transition-colors" />
-          </CardContent>
-        </Card>
-      </Link>
-
       {/* CEO View */}
       <CeoStatusPanel businessId={businessId} />
 

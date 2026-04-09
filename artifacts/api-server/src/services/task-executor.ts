@@ -3,7 +3,6 @@ import { db, tasksTable, taskCommentsTable, businessesTable, businessArtifactsTa
 import { openai } from "@workspace/integrations-openai-ai-server";
 import { listMessages, sendEmail } from "../lib/agentmail";
 import { sendScheduledEmails } from "../routes/email";
-import { sendDueReportEmails } from "./daily-report-scheduler";
 import { logger } from "../lib/logger";
 import { CEO_SKILL_SUMMARY } from "../lib/ceo-skill";
 
@@ -15,7 +14,6 @@ const STALL_THRESHOLD_MS = 6 * 60_000;      // After 6 min with no update, task 
 const INBOX_CHECK_INTERVAL_MS = 5 * 60_000; // Check inboxes every 5 min
 const SCHEDULED_EMAIL_INTERVAL_MS = 60 * 60_000; // Send scheduled emails every hour
 const CEO_REVIEW_INTERVAL_MS = 5 * 60_000;  // CEO review runs every 5 minutes
-const DAILY_REPORT_INTERVAL_MS = 60 * 60_000; // Check daily reports every hour
 
 // ─── State ────────────────────────────────────────────────────────────────────
 
@@ -35,8 +33,6 @@ let lastInboxCheckAt = 0;
 let lastScheduledEmailAt = 0;
 // Timestamp of last CEO review run
 let lastCeoReviewAt = 0;
-// Timestamp of last daily report check
-let lastDailyReportAt = 0;
 
 // ─── Agent names ──────────────────────────────────────────────────────────────
 
@@ -905,12 +901,6 @@ async function orchestratorTick() {
     if (now - lastCeoReviewAt >= CEO_REVIEW_INTERVAL_MS) {
       lastCeoReviewAt = now;
       ceoReviewTick().catch(err => logger.error({ err }, "CEO review tick failed"));
-    }
-
-    // Daily customer report emails every hour
-    if (now - lastDailyReportAt >= DAILY_REPORT_INTERVAL_MS) {
-      lastDailyReportAt = now;
-      sendDueReportEmails().catch(err => logger.error({ err }, "Daily report emails failed"));
     }
   } catch (err) {
     logger.error({ err }, "Orchestrator tick failed");

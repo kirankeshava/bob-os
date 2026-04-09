@@ -12,6 +12,7 @@ export const signupsTable = pgTable("signups", {
   yelpListingUrl: text("yelp_listing_url"),
   planName: text("plan_name"),
   businessId: text("business_id"),
+  paymentMethod: text("payment_method").notNull().default("stripe"),
   onboardingTriggered: boolean("onboarding_triggered").notNull().default(false),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),

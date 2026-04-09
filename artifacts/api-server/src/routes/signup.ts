@@ -1,13 +1,14 @@
 import { Router } from "express";
 import { eq } from "drizzle-orm";
-import { db, signupsTable, businessesTable, businessSitesTable, outreachEmailsTable } from "@workspace/db";
+import { db, signupsTable, customersTable, businessesTable, businessSitesTable, outreachEmailsTable } from "@workspace/db";
 import { sendEmail, ensureInbox } from "../lib/agentmail";
+import { getUncachableStripeClient } from "../lib/stripeClient";
+import { isPayPalConfigured, ensureProductAndPlan, createSubscription, getZelleContactInfo } from "../lib/paypalClient";
 import { openai } from "@workspace/integrations-openai-ai-server";
 import { logger } from "../lib/logger";
 
 const router = Router({ mergeParams: true });
 
-// POST /businesses/:businessId/signup  — public signup for a business site visitor
 router.post("/", async (req, res) => {
   const businessId = parseInt(req.params.businessId);
   if (isNaN(businessId)) {
@@ -15,7 +16,6 @@ router.post("/", async (req, res) => {
     return;
   }
 
-  // Verify the business has a public site (ensures businessId is a real, public site context)
   const [site] = await db.select({ businessId: businessSitesTable.businessId, published: businessSitesTable.published })
     .from(businessSitesTable)
     .where(eq(businessSitesTable.businessId, businessId));
@@ -25,7 +25,8 @@ router.post("/", async (req, res) => {
     return;
   }
 
-  const { fullName, email, businessName, platforms, googleListingUrl, yelpListingUrl, planName } = req.body;
+  const { fullName, email, businessName, platforms, googleListingUrl, yelpListingUrl, planName, paymentMethod: rawPaymentMethod } = req.body;
+  const paymentMethod = ["stripe", "paypal", "zelle"].includes(rawPaymentMethod) ? rawPaymentMethod : "stripe";
 
   if (!fullName || !email || !businessName) {
     res.status(400).json({ error: "fullName, email, and businessName are required" });
@@ -56,13 +57,89 @@ router.post("/", async (req, res) => {
     yelpListingUrl: yelpListingUrl ?? null,
     planName: planName ?? null,
     businessId: String(businessId),
+    paymentMethod,
     onboardingTriggered: false,
   }).returning();
+
+  const trialStartAt = new Date();
+  const trialEndAt = new Date(trialStartAt.getTime() + 7 * 24 * 60 * 60 * 1000);
+
+  let stripeCustomerId: string | null = null;
+  if (paymentMethod === "stripe") {
+    try {
+      const stripe = await getUncachableStripeClient();
+      const stripeCustomer = await stripe.customers.create({
+        name: fullName,
+        email,
+        metadata: { businessName, platforms: platforms.join(",") },
+      });
+      stripeCustomerId = stripeCustomer.id;
+      logger.info({ stripeCustomerId, email }, "Stripe customer created during signup");
+    } catch (err) {
+      logger.error({ err, email }, "Failed to create Stripe customer during signup");
+    }
+  }
+
+  const [customer] = await db.insert(customersTable).values({
+    name: fullName,
+    email,
+    businessName,
+    platforms,
+    googleUrl: googleListingUrl ?? null,
+    yelpUrl: yelpListingUrl ?? null,
+    stripeCustomerId,
+    paymentMethod,
+    subscriptionStatus: "trial",
+    trialStartAt,
+    trialEndAt,
+  }).returning();
+
+  logger.info({ customerId: customer.id, signupId: signup.id, paymentMethod }, "Customer record created from signup");
+
+  let paymentData: Record<string, unknown> = {};
+
+  if (paymentMethod === "stripe" && stripeCustomerId) {
+    try {
+      const stripe = await getUncachableStripeClient();
+      const domain = process.env.REPLIT_DEV_DOMAIN
+        ? `https://${process.env.REPLIT_DEV_DOMAIN}`
+        : "https://localhost";
+      const session = await stripe.billingPortal.sessions.create({
+        customer: stripeCustomerId,
+        return_url: `${domain}/`,
+      });
+      paymentData = { billingPortalUrl: session.url };
+    } catch (err) {
+      logger.error({ err }, "Failed to create Stripe billing portal for signup");
+    }
+  } else if (paymentMethod === "paypal" && isPayPalConfigured()) {
+    try {
+      const { planId } = await ensureProductAndPlan();
+      const domain = process.env.REPLIT_DEV_DOMAIN
+        ? `https://${process.env.REPLIT_DEV_DOMAIN}`
+        : "https://localhost";
+      const { subscriptionId, approvalUrl } = await createSubscription(
+        planId,
+        fullName,
+        email,
+        `${domain}/?paypal=success&customerId=${customer.id}`,
+        `${domain}/?paypal=cancelled&customerId=${customer.id}`,
+      );
+      await db.update(customersTable)
+        .set({ paypalSubscriptionId: subscriptionId, updatedAt: new Date() })
+        .where(eq(customersTable.id, customer.id));
+      paymentData = { paypalApprovalUrl: approvalUrl, paypalSubscriptionId: subscriptionId };
+    } catch (err) {
+      logger.error({ err }, "Failed to create PayPal subscription for signup");
+    }
+  } else if (paymentMethod === "zelle") {
+    paymentData = { zelleContactInfo: getZelleContactInfo() };
+  }
 
   try {
     const [business] = await db.select().from(businessesTable).where(eq(businessesTable.id, businessId));
     if (!business) {
-      res.status(404).json({ error: "Business not found" });
+      res.json({ success: true, signupId: signup.id, customerId: customer.id, paymentMethod, paymentData, onboardingTriggered: false });
       return;
     }
 
@@ -85,7 +162,7 @@ router.post("/", async (req, res) => {
 
     if (!inboxId) {
       logger.warn({ signupId: signup.id }, "No inbox available — signup saved without onboarding emails");
-      res.json({ success: true, signupId: signup.id, onboardingTriggered: false });
+      res.json({ success: true, signupId: signup.id, customerId: customer.id, paymentMethod, paymentData, onboardingTriggered: false });
       return;
     }
 
@@ -194,7 +271,7 @@ Respond with ONLY valid JSON array:
 
     logger.info({ signupId: signup.id, sequenceCount: generatedEmails.length, welcomeSent }, "Onboarding sequence saved for new signup");
 
-    res.json({ success: true, signupId: signup.id, onboardingTriggered: true });
+    res.json({ success: true, signupId: signup.id, customerId: customer.id, paymentMethod, paymentData, onboardingTriggered: true });
   } catch (err) {
     logger.error({ err, signupId: signup.id }, "Failed to trigger onboarding sequence for signup");
     res.status(500).json({ error: "Failed to set up onboarding sequence. Please try again." });

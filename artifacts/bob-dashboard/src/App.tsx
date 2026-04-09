@@ -9,7 +9,6 @@ import BusinessArtifactsPage from "@/pages/business-artifacts";
 import TaskDetail from "@/pages/task-detail";
 import AgentRuns from "@/pages/agent-runs";
 import BusinessSitePage from "@/pages/business-site";
-import BusinessPerformancePage from "@/pages/business-performance";
 import SkillsPage from "@/pages/skills";
 import CustomersPage from "@/pages/customers";
 import CeoPage from "@/pages/ceo";
@@ -43,7 +42,6 @@ function Router() {
           <Route path="/" component={Dashboard} />
           <Route path="/businesses/:id/artifacts" component={BusinessArtifactsPage} />
           <Route path="/businesses/:id" component={BusinessDetail} />
-          <Route path="/businesses/:id/performance" component={BusinessPerformancePage} />
           <Route path="/businesses/:id/tasks/:taskId" component={TaskDetail} />
           <Route path="/agent-runs" component={AgentRuns} />
           <Route path="/skills" component={SkillsPage} />
