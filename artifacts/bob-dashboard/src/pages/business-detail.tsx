@@ -132,6 +132,59 @@ function ArtifactCard({ artifact }: { artifact: BusinessArtifact }) {
   );
 }
 
+// ─── Artifact Summary Table ───────────────────────────────────────────────────
+
+function ArtifactSummaryTable({ artifacts }: { artifacts: BusinessArtifact[] }) {
+  const summary = React.useMemo(() => {
+    const map = new Map<string, Map<string, number>>();
+    const agents = new Set<string>();
+    for (const a of artifacts) {
+      const agent = a.createdBy ?? "unknown";
+      agents.add(agent);
+      if (!map.has(a.artifactType)) map.set(a.artifactType, new Map());
+      const row = map.get(a.artifactType)!;
+      row.set(agent, (row.get(agent) ?? 0) + 1);
+    }
+    return { map, agents: Array.from(agents).sort() };
+  }, [artifacts]);
+
+  const types = Array.from(summary.map.keys()).sort();
+
+  return (
+    <div className="rounded-lg border border-border/40 overflow-hidden">
+      <table className="w-full text-[10px]">
+        <thead>
+          <tr className="bg-muted/20 border-b border-border/30">
+            <th className="text-left px-2 py-1.5 font-mono font-semibold text-muted-foreground uppercase tracking-wider">Type</th>
+            {summary.agents.map(agent => (
+              <th key={agent} className="text-center px-2 py-1.5 font-mono font-semibold text-muted-foreground uppercase tracking-wider">{agent}</th>
+            ))}
+            <th className="text-center px-2 py-1.5 font-mono font-semibold text-muted-foreground uppercase tracking-wider">Total</th>
+          </tr>
+        </thead>
+        <tbody>
+          {types.map(type => {
+            const row = summary.map.get(type)!;
+            const total = Array.from(row.values()).reduce((s, v) => s + v, 0);
+            const colorClass = ARTIFACT_COLORS[type] ?? ARTIFACT_COLORS.document;
+            return (
+              <tr key={type} className="border-b border-border/20 hover:bg-muted/10">
+                <td className="px-2 py-1.5">
+                  <Badge variant="outline" className={`text-[9px] font-mono px-1 py-0 border ${colorClass}`}>{type}</Badge>
+                </td>
+                {summary.agents.map(agent => (
+                  <td key={agent} className="text-center px-2 py-1.5 text-muted-foreground font-mono">{row.get(agent) ?? 0}</td>
+                ))}
+                <td className="text-center px-2 py-1.5 font-mono font-semibold text-foreground">{total}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 // ─── Approval Card ────────────────────────────────────────────────────────────
 
 const APPROVAL_STYLES: Record<ApprovalType, {
@@ -1168,22 +1221,6 @@ export default function BusinessDetail() {
         <div><p className="text-[10px] text-muted-foreground uppercase font-mono mb-0.5">Rank</p><p className="font-semibold text-sm">{business.rank} / 5</p></div>
       </div>
 
-      {/* Performance Link */}
-      <Link to={`/businesses/${businessId}/performance`}>
-        <Card className="border-emerald-500/20 bg-emerald-950/10 hover:border-emerald-500/40 transition-colors cursor-pointer group">
-          <CardContent className="p-3 flex items-center gap-3">
-            <div className="p-2 rounded-lg bg-emerald-500/15 border border-emerald-500/30">
-              <BarChart2 className="h-4 w-4 text-emerald-400" />
-            </div>
-            <div className="flex-1">
-              <p className="text-xs font-bold font-mono uppercase text-emerald-400">Performance</p>
-              <p className="text-[10px] text-muted-foreground">Revenue, growth, customer feedback &amp; competitive position</p>
-            </div>
-            <ChevronRight className="h-4 w-4 text-emerald-400/60 group-hover:text-emerald-400 transition-colors" />
-          </CardContent>
-        </Card>
-      </Link>
-
       {/* CEO View */}
       <CeoStatusPanel businessId={businessId} />
 
@@ -1398,6 +1435,16 @@ export default function BusinessDetail() {
                   <h2 className="text-sm font-bold font-mono uppercase tracking-wider text-yellow-400">Project Documents</h2>
                   {artifacts && artifacts.length > 0 && <Badge variant="secondary" className="font-mono text-xs ml-auto">{artifacts.length}</Badge>}
                 </div>
+                {!isLoadingArtifacts && artifacts && artifacts.length > 0 && (
+                  <>
+                    <ArtifactSummaryTable artifacts={artifacts} />
+                    <Link href={`/businesses/${businessId}/artifacts`}>
+                      <span className="inline-flex items-center gap-1 text-xs text-primary/80 hover:text-primary font-medium cursor-pointer transition-colors">
+                        View All Artifacts <ChevronRight className="h-3 w-3" />
+                      </span>
+                    </Link>
+                  </>
+                )}
                 {isLoadingArtifacts ? (
                   <div className="space-y-2">{[1, 2].map(i => <Card key={i} className="animate-pulse bg-muted/20 border-border/50 h-24" />)}</div>
                 ) : artifacts && artifacts.length > 0 ? (
