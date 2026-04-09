@@ -13,6 +13,7 @@ import signupRouter from "./signup";
 import skillsRouter from "./skills";
 import customersRouter from "./customers";
 import ceoReviewsRouter from "./ceo-reviews";
+import knowledgeBaseRouter from "./knowledge-base";
 
 const router: IRouter = Router();
 
@@ -22,6 +23,7 @@ router.use("/businesses/:businessId/artifacts", artifactsRouter);
 router.use("/businesses/:businessId/site", sitesRouter);
 router.use("/businesses/:businessId/inbox", emailRouter);
 router.use("/businesses/:businessId/ceo-review", ceoReviewsRouter);
+router.use("/businesses/:businessId/knowledge-base", knowledgeBaseRouter);
 router.use("/", tasksRouter);
 router.use("/", commentsRouter);
 router.use("/dashboard", dashboardRouter);

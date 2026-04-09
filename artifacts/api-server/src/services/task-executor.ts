@@ -1,9 +1,8 @@
 import { eq, inArray, and, desc } from "drizzle-orm";
-import { db, tasksTable, taskCommentsTable, businessesTable, businessArtifactsTable, businessSitesTable, outreachEmailsTable, skillsTable, ceoReviewsTable } from "@workspace/db";
+import { db, tasksTable, taskCommentsTable, businessesTable, businessArtifactsTable, businessSitesTable, outreachEmailsTable, skillsTable, ceoReviewsTable, knowledgeBaseEntriesTable } from "@workspace/db";
 import { openai } from "@workspace/integrations-openai-ai-server";
 import { listMessages, sendEmail } from "../lib/agentmail";
 import { sendScheduledEmails } from "../routes/email";
-import { sendDueReportEmails } from "./daily-report-scheduler";
 import { logger } from "../lib/logger";
 import { CEO_SKILL_SUMMARY } from "../lib/ceo-skill";
 
@@ -15,7 +14,6 @@ const STALL_THRESHOLD_MS = 6 * 60_000;      // After 6 min with no update, task 
 const INBOX_CHECK_INTERVAL_MS = 5 * 60_000; // Check inboxes every 5 min
 const SCHEDULED_EMAIL_INTERVAL_MS = 60 * 60_000; // Send scheduled emails every hour
 const CEO_REVIEW_INTERVAL_MS = 5 * 60_000;  // CEO review runs every 5 minutes
-const DAILY_REPORT_INTERVAL_MS = 60 * 60_000; // Check daily reports every hour
 
 // ─── State ────────────────────────────────────────────────────────────────────
 
@@ -35,8 +33,6 @@ let lastInboxCheckAt = 0;
 let lastScheduledEmailAt = 0;
 // Timestamp of last CEO review run
 let lastCeoReviewAt = 0;
-// Timestamp of last daily report check
-let lastDailyReportAt = 0;
 
 // ─── Agent names ──────────────────────────────────────────────────────────────
 
@@ -97,6 +93,50 @@ async function getRelevantSkillsForTask(taskTitle: string, agentType: string | n
     return `\n\n---\n# Injected Skills\nThe following skills provide additional context and capabilities for this task:\n\n${sections.join("\n\n---\n\n")}`;
   } catch (err) {
     logger.warn({ err }, "Failed to load skills for task context");
+    return "";
+  }
+}
+
+// ─── Knowledge Base Context ───────────────────────────────────────────────────
+
+async function getKnowledgeBaseContext(businessId: number, query: string): Promise<string> {
+  try {
+    const entries = await db
+      .select()
+      .from(knowledgeBaseEntriesTable)
+      .where(eq(knowledgeBaseEntriesTable.businessId, businessId));
+
+    const readyEntries = entries.filter(e => e.status === "ready" && e.rawText);
+    if (readyEntries.length === 0) return "";
+
+    const queryWords = query.toLowerCase().split(/\W+/).filter(w => w.length > 3);
+
+    const scored = readyEntries.map(entry => {
+      const text = entry.rawText.toLowerCase();
+      const score = queryWords.reduce((acc, word) => {
+        const matches = (text.match(new RegExp(word, "g")) ?? []).length;
+        return acc + matches;
+      }, 0);
+      return { entry, score };
+    });
+
+    scored.sort((a, b) => b.score - a.score);
+
+    const top3 = scored.slice(0, 3);
+    const TOKEN_BUDGET = 1500;
+    const chunks: string[] = [];
+    let totalLen = 0;
+
+    for (const { entry } of top3) {
+      const chunk = `[${entry.sourceName}]:\n${entry.rawText.slice(0, 1000)}`;
+      if (totalLen + chunk.length > TOKEN_BUDGET * 4) break;
+      chunks.push(chunk);
+      totalLen += chunk.length;
+    }
+
+    return chunks.join("\n\n---\n\n");
+  } catch (err) {
+    logger.warn({ err }, "Failed to load knowledge base context");
     return "";
   }
 }
@@ -381,6 +421,8 @@ async function monitorInboxes() {
             .map(a => `[${a.artifactType}] ${a.title}: ${a.content.slice(0, 200)}`)
             .join("\n");
 
+          const kbContext = await getKnowledgeBaseContext(business.id, `${msg.subject ?? ""} ${msg.body ?? ""}`);
+
           const replyPrompt = `You are representing "${business.name}" and received the following email. Write a professional, friendly reply.
 
 Business: ${business.name}
@@ -392,6 +434,7 @@ Body: ${msg.body}
 
 Recent work context:
 ${artifactSummary || "None"}
+${kbContext ? `\nKnowledge base context:\n${kbContext}` : ""}
 
 Write a concise, helpful reply (100-150 words). Be professional but warm. Sign off as "${business.name} Team".
 Reply with ONLY the email body text — no subject line, no metadata.`;
@@ -858,12 +901,6 @@ async function orchestratorTick() {
     if (now - lastCeoReviewAt >= CEO_REVIEW_INTERVAL_MS) {
       lastCeoReviewAt = now;
       ceoReviewTick().catch(err => logger.error({ err }, "CEO review tick failed"));
-    }
-
-    // Daily customer report emails every hour
-    if (now - lastDailyReportAt >= DAILY_REPORT_INTERVAL_MS) {
-      lastDailyReportAt = now;
-      sendDueReportEmails().catch(err => logger.error({ err }, "Daily report emails failed"));
     }
   } catch (err) {
     logger.error({ err }, "Orchestrator tick failed");

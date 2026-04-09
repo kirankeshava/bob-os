@@ -9,5 +9,4 @@ export * from "./signups";
 export * from "./skills";
 export * from "./customers";
 export * from "./ceo-reviews";
-export * from "./reviews";
-export * from "./daily-reports";
+export * from "./knowledge-base";

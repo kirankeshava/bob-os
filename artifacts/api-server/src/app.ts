@@ -9,6 +9,7 @@ import { startGithubSync } from "./services/github-sync";
 import { provisionMissingInboxes } from "./services/email-provisioner";
 import { startTrialExpiryScheduler } from "./services/trial-expiry";
 import { handleStripeEvent } from "./services/stripe-sync";
+import { handlePayPalWebhookEvent } from "./services/paypal-sync";
 
 const app: Express = express();
 
@@ -67,6 +68,26 @@ app.post(
       res.status(200).json({ received: true });
     } catch (error) {
       logger.error({ error }, "Stripe webhook error");
+      res.status(400).json({ error: "Webhook processing error" });
+    }
+  }
+);
+
+app.post(
+  "/api/paypal/webhook",
+  express.json(),
+  async (req, res) => {
+    try {
+      const event = req.body as { event_type: string; resource: Record<string, unknown> };
+      if (!event.event_type) {
+        res.status(400).json({ error: "Invalid webhook payload" });
+        return;
+      }
+
+      await handlePayPalWebhookEvent(event.event_type, event.resource ?? {});
+      res.status(200).json({ received: true });
+    } catch (error) {
+      logger.error({ error }, "PayPal webhook error");
       res.status(400).json({ error: "Webhook processing error" });
     }
   }
