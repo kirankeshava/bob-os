@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { eq, desc } from "drizzle-orm";
-import { db, agentRunsTable, businessesTable, tasksTable, taskCommentsTable } from "@workspace/db";
+import { db, agentRunsTable, businessesTable, tasksTable, taskCommentsTable, skillsTable } from "@workspace/db";
 import { openai } from "@workspace/integrations-openai-ai-server";
 import { GetAgentRunParams, TriggerOrchestrateParams } from "@workspace/api-zod";
 import { logger } from "../lib/logger";
@@ -192,6 +192,8 @@ Create a comprehensive task plan to achieve the revenue target.`,
 
   log += `Creating ${tasks.length} tasks...\n`;
 
+  const createdTasks: Array<{ id: number; title: string; agentType: string }> = [];
+
   for (const task of tasks) {
     const [newTask] = await db
       .insert(tasksTable)
@@ -215,6 +217,7 @@ Create a comprehensive task plan to achieve the revenue target.`,
       content: `Task created by Orchestrator Agent. Priority: ${task.priority}. Deliverable: ${task.deliverables || "See description"}`,
     });
 
+    createdTasks.push({ id: newTask.id, title: newTask.title, agentType: newTask.agentType ?? "agent" });
     log += `Created task: ${task.title}\n`;
   }
 
@@ -222,6 +225,37 @@ Create a comprehensive task plan to achieve the revenue target.`,
     .update(businessesTable)
     .set({ status: "active", updatedAt: new Date() })
     .where(eq(businessesTable.id, businessId));
+
+  // Proactive skill suggestion: check if installed skills would benefit the new tasks
+  try {
+    const activeSkills = await db.select().from(skillsTable).where(eq(skillsTable.status, "active"));
+    const taskTypes = [...new Set(createdTasks.map(t => t.agentType))];
+    const relevantSkills = activeSkills.filter(skill => {
+      const skillText = `${skill.name} ${skill.description}`.toLowerCase();
+      return taskTypes.some(type => skillText.includes(type));
+    });
+
+    if (relevantSkills.length > 0) {
+      const skillNames = relevantSkills.map(s => s.name).join(", ");
+      for (const task of createdTasks) {
+        const matchingSkills = relevantSkills.filter(skill => {
+          const skillText = `${skill.name} ${skill.description}`.toLowerCase();
+          return skillText.includes(task.agentType) || skillText.includes(task.title.toLowerCase().split(" ")[0]);
+        });
+        if (matchingSkills.length > 0) {
+          await db.insert(taskCommentsTable).values({
+            taskId: task.id,
+            author: "Orchestrator",
+            agentType: "orchestrator",
+            content: `**🧠 Skills injected:** The following skills will augment this agent: ${matchingSkills.map(s => `**${s.name}**`).join(", ")}. Their instructions have been added to the agent's context automatically.`,
+          });
+        }
+      }
+      log += `Skill suggestion: ${skillNames} will augment relevant tasks.\n`;
+    }
+  } catch (skillErr) {
+    logger.warn({ skillErr }, "Orchestrator: skill suggestion step failed");
+  }
 
   await db
     .update(agentRunsTable)
