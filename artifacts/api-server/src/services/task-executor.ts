@@ -1,5 +1,5 @@
 import { eq, inArray, and } from "drizzle-orm";
-import { db, tasksTable, taskCommentsTable, businessesTable, businessArtifactsTable, businessSitesTable, outreachEmailsTable, skillsTable } from "@workspace/db";
+import { db, tasksTable, taskCommentsTable, businessesTable, businessArtifactsTable, businessSitesTable, outreachEmailsTable } from "@workspace/db";
 import { openai } from "@workspace/integrations-openai-ai-server";
 import { listMessages, sendEmail } from "../lib/agentmail";
 import { sendScheduledEmails } from "../routes/email";
@@ -61,38 +61,6 @@ interface TaskProgress {
   artifact?: TaskArtifact;
 }
 
-// ─── Skill Helpers ────────────────────────────────────────────────────────────
-
-function skillMatchesTask(skillDescription: string, taskTitle: string, agentType: string | null): boolean {
-  const text = `${taskTitle} ${agentType ?? ""}`.toLowerCase();
-  const keywords = skillDescription.toLowerCase().split(/\W+/).filter(w => w.length > 3);
-  return keywords.some(kw => text.includes(kw));
-}
-
-async function getRelevantSkillsForTask(taskTitle: string, agentType: string | null): Promise<string> {
-  try {
-    const activeSkills = await db
-      .select()
-      .from(skillsTable)
-      .where(eq(skillsTable.status, "active"));
-
-    const matched = activeSkills.filter(s =>
-      s.content && skillMatchesTask(s.description || s.name, taskTitle, agentType)
-    );
-
-    if (matched.length === 0) return "";
-
-    const sections = matched.map(s =>
-      `## Skill: ${s.name}\n${s.content.slice(0, 2000)}`
-    );
-
-    return `\n\n---\n# Injected Skills\nThe following skills provide additional context and capabilities for this task:\n\n${sections.join("\n\n---\n\n")}`;
-  } catch (err) {
-    logger.warn({ err }, "Failed to load skills for task context");
-    return "";
-  }
-}
-
 // ─── Task Execution ───────────────────────────────────────────────────────────
 
 async function executeTask(
@@ -115,8 +83,6 @@ async function executeTask(
 
   const agentName = task.agentType ? (AGENT_NAMES[task.agentType] ?? `${task.agentType} Agent`) : "AI Agent";
   const cycleCount = recentComments.length;
-
-  const injectedSkills = await getRelevantSkillsForTask(task.title, task.agentType);
 
   const systemPrompt = `You are ${agentName}, an autonomous AI agent working on a business task to reach $100k revenue in 30 days.
 
@@ -170,7 +136,7 @@ Respond with ONLY valid JSON:
 ## STATUS RULES:
 - "complete": all deliverables fully done, ready for owner to execute
 - "needs_approval": ONLY when real money ($) must be spent. NOTHING ELSE triggers this.
-- "continue": still working — use this for ALL non-financial work including account creation${injectedSkills}`;
+- "continue": still working — use this for ALL non-financial work including account creation`;
 
   const businessAssets = [
     siteUrl ? `Business Website URL: ${siteUrl} (share this URL with customers to prove legitimacy)` : null,
