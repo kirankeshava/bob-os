@@ -594,6 +594,176 @@ paths:
                 items:
                   $ref: "#/components/schemas/BusinessArtifact"
 
+  /businesses/{businessId}/performance:
+    get:
+      operationId: getBusinessPerformance
+      tags: [businesses]
+      summary: Get performance metrics for a business
+      parameters:
+        - name: businessId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Performance metrics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BusinessPerformance"
+    patch:
+      operationId: updateBusinessPerformance
+      tags: [businesses]
+      summary: Update performance metrics for a business
+      parameters:
+        - name: businessId
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateBusinessPerformanceBody"
+      responses:
+        "200":
+          description: Updated performance metrics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BusinessPerformance"
+
+  /businesses/{businessId}/performance/feedback:
+    get:
+      operationId: listCustomerFeedback
+      tags: [businesses]
+      summary: List customer feedback for a business
+      parameters:
+        - name: businessId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: List of feedback entries
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/CustomerFeedback"
+    post:
+      operationId: createCustomerFeedback
+      tags: [businesses]
+      summary: Add customer feedback
+      parameters:
+        - name: businessId
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCustomerFeedbackBody"
+      responses:
+        "201":
+          description: Created feedback entry
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CustomerFeedback"
+
+  /businesses/{businessId}/performance/feedback/{feedbackId}:
+    delete:
+      operationId: deleteCustomerFeedback
+      tags: [businesses]
+      summary: Delete a customer feedback entry
+      parameters:
+        - name: businessId
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: feedbackId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Deleted
+
+  /businesses/{businessId}/performance/competitors:
+    get:
+      operationId: listCompetitors
+      tags: [businesses]
+      summary: List competitors for a business
+      parameters:
+        - name: businessId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: List of competitors
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Competitor"
+    post:
+      operationId: createCompetitor
+      tags: [businesses]
+      summary: Add a competitor
+      parameters:
+        - name: businessId
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCompetitorBody"
+      responses:
+        "201":
+          description: Created competitor entry
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Competitor"
+
+  /businesses/{businessId}/performance/competitors/{competitorId}:
+    delete:
+      operationId: deleteCompetitor
+      tags: [businesses]
+      summary: Delete a competitor entry
+      parameters:
+        - name: businessId
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: competitorId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Deleted
+
   /dashboard/agent-activity:
     get:
       operationId: getAgentActivity
@@ -1404,6 +1574,161 @@ components:
           type: string
       required:
         - url
+
+    BusinessPerformance:
+      type: object
+      properties:
+        id:
+          type: integer
+        businessId:
+          type: integer
+        income:
+          type: ["number", "null"]
+        monthlySpend:
+          type: ["number", "null"]
+        netBurnProfit:
+          type: ["number", "null"]
+        runwayDays:
+          type: ["integer", "null"]
+        reached:
+          type: ["integer", "null"]
+        signups:
+          type: ["integer", "null"]
+        activeUsers:
+          type: ["integer", "null"]
+        arpu:
+          type: ["number", "null"]
+        churnRate:
+          type: ["number", "null"]
+        npsScore:
+          type: ["number", "null"]
+        healthScore:
+          type: ["string", "null"]
+        topSources:
+          type: ["string", "null"]
+        notes:
+          type: ["string", "null"]
+        createdAt:
+          type: string
+        updatedAt:
+          type: string
+      required:
+        - id
+        - businessId
+        - createdAt
+        - updatedAt
+
+    UpdateBusinessPerformanceBody:
+      type: object
+      properties:
+        income:
+          type: number
+        monthlySpend:
+          type: number
+        netBurnProfit:
+          type: number
+        runwayDays:
+          type: integer
+        reached:
+          type: integer
+        signups:
+          type: integer
+        activeUsers:
+          type: integer
+        arpu:
+          type: number
+        churnRate:
+          type: number
+        npsScore:
+          type: number
+        healthScore:
+          type: string
+        topSources:
+          type: string
+        notes:
+          type: string
+
+    CustomerFeedback:
+      type: object
+      properties:
+        id:
+          type: integer
+        businessId:
+          type: integer
+        source:
+          type: ["string", "null"]
+        text:
+          type: string
+        sentiment:
+          type: string
+        date:
+          type: string
+        createdAt:
+          type: string
+      required:
+        - id
+        - businessId
+        - text
+        - sentiment
+        - date
+        - createdAt
+
+    CreateCustomerFeedbackBody:
+      type: object
+      properties:
+        source:
+          type: string
+        text:
+          type: string
+        sentiment:
+          type: string
+          enum: [positive, neutral, negative]
+        date:
+          type: string
+      required:
+        - text
+        - sentiment
+
+    Competitor:
+      type: object
+      properties:
+        id:
+          type: integer
+        businessId:
+          type: integer
+        name:
+          type: string
+        strengths:
+          type: ["string", "null"]
+        weaknesses:
+          type: ["string", "null"]
+        pricing:
+          type: ["string", "null"]
+        notes:
+          type: ["string", "null"]
+        createdAt:
+          type: string
+      required:
+        - id
+        - businessId
+        - name
+        - createdAt
+
+    CreateCompetitorBody:
+      type: object
+      properties:
+        name:
+          type: string
+        strengths:
+          type: string
+        weaknesses:
+          type: string
+        pricing:
+          type: string
+        notes:
+          type: string
+      required:
+        - name
 
     SendEmailBody:
       type: object

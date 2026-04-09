@@ -35,6 +35,7 @@ pnpm workspace monorepo using TypeScript. Each package manages its own dependenc
   - `/` — Mission Control dashboard with capital trajectory, 5 business cards, summary stats, agent runs
   - `/businesses/:id` — Business detail + Kanban board + Website & Inbox panel
   - `/businesses/:id/tasks/:taskId` — Task detail with comment thread
+  - `/businesses/:id/performance` — Business performance metrics (financials, growth, feedback, competitors)
   - `/agent-runs` — Agent run monitor with live polling
   - `/sites/:id` — Public-facing business website (no admin chrome, AI-generated content)
 
@@ -59,6 +60,9 @@ pnpm workspace monorepo using TypeScript. Each package manages its own dependenc
   - `POST /skills/install` — Install a skill by GitHub source (fetches SKILL.md)
   - `PATCH /skills/:id` — Toggle skill status (active/disabled)
   - `DELETE /skills/:id` — Remove a skill
+  - `GET/PATCH /businesses/:id/performance` — Business performance metrics (income, spend, users, health score, etc.)
+  - `GET/POST/DELETE /businesses/:id/performance/feedback` — Customer feedback CRUD
+  - `GET/POST/DELETE /businesses/:id/performance/competitors` — Competitor tracking CRUD
   - `GET /businesses/:id/knowledge-base` — List all KB entries for a business
   - `POST /businesses/:id/knowledge-base/upload` — Upload a file (PDF, DOCX, TXT) to the KB; text is extracted asynchronously
   - `POST /businesses/:id/knowledge-base/url` — Add a URL to the KB; content is crawled asynchronously
@@ -81,6 +85,9 @@ pnpm workspace monorepo using TypeScript. Each package manages its own dependenc
 - `customers` — Customer signups with trial/subscription status, Stripe ID, review platform URLs
 - `reviews` — Customer reviews (platform, rating, author, text, date, AI-proposed reply text, respondedAt)
 - `daily_reports` — 7-day report schedule per customer (dayNumber 1-7, sentAt, emailMessageId, reportData JSON)
+- `business_performance` — Per-business performance metrics (income, monthlySpend, netBurnProfit, runwayDays, reached, signups, activeUsers, arpu, churnRate, npsScore, healthScore, topSources, notes)
+- `customer_feedback` — Customer feedback entries per business (source, text, sentiment, date)
+- `competitors` — Tracked competitors per business (name, strengths, weaknesses, pricing, notes)
 
 ## Knowledge Base System
 
