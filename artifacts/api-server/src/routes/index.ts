@@ -9,6 +9,7 @@ import artifactsRouter from "./artifacts";
 import sitesRouter from "./sites";
 import emailRouter from "./email";
 import syncRouter from "./sync";
+import signupRouter from "./signup";
 
 const router: IRouter = Router();
 
@@ -22,5 +23,6 @@ router.use("/", commentsRouter);
 router.use("/dashboard", dashboardRouter);
 router.use("/agent", agentsRouter);
 router.use("/sync", syncRouter);
+router.use("/businesses/:businessId/signup", signupRouter);
 
 export default router;
