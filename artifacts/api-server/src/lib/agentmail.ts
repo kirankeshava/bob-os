@@ -95,7 +95,7 @@ export async function createInbox(displayName: string): Promise<AgentMailInbox |
 
 export async function getInbox(inboxId: string): Promise<AgentMailInbox | null> {
   try {
-    const response = await agentmailFetch(`/inboxes/${inboxId}`, { method: "GET" });
+    const response = await agentmailFetch(`/inboxes/${encodeURIComponent(inboxId)}`, { method: "GET" });
     if (!response.ok) return null;
     const data = await response.json() as { inbox_id?: string; email?: string; display_name?: string };
     return {
@@ -111,7 +111,7 @@ export async function getInbox(inboxId: string): Promise<AgentMailInbox | null> 
 
 export async function listMessages(inboxId: string): Promise<AgentMailMessage[]> {
   try {
-    const response = await agentmailFetch(`/inboxes/${inboxId}/messages`, { method: "GET" });
+    const response = await agentmailFetch(`/inboxes/${encodeURIComponent(inboxId)}/messages`, { method: "GET" });
     if (!response.ok) return [];
     const data = await response.json() as unknown;
     const msgs = Array.isArray(data) ? data : ((data as Record<string, unknown>).messages as AgentMailMessage[] ?? []);
@@ -141,13 +141,19 @@ export async function sendEmail(
   try {
     const payload: Record<string, string> = { to, subject, text: body };
     if (htmlBody) payload.html = htmlBody;
-    const response = await agentmailFetch(`/inboxes/${inboxId}/messages`, {
+    const encodedId = encodeURIComponent(inboxId);
+    const response = await agentmailFetch(`/inboxes/${encodedId}/messages`, {
       method: "POST",
       body: JSON.stringify(payload),
     });
     if (!response.ok) {
       const text = await response.text();
-      logger.warn({ status: response.status, body: text }, "AgentMail sendEmail failed");
+      if (response.status === 404) {
+        // Outbound sending not supported on current AgentMail plan
+        logger.warn({ inboxId, to, subject }, "AgentMail sendEmail: outbound not available on current plan");
+      } else {
+        logger.warn({ status: response.status, body: text }, "AgentMail sendEmail failed");
+      }
       return null;
     }
     const data = await response.json() as { id?: string; message_id?: string; thread_id?: string };
@@ -164,7 +170,7 @@ export async function replyToThread(
   body: string,
 ): Promise<boolean> {
   try {
-    const response = await agentmailFetch(`/inboxes/${inboxId}/threads/${threadId}/reply`, {
+    const response = await agentmailFetch(`/inboxes/${encodeURIComponent(inboxId)}/threads/${threadId}/reply`, {
       method: "POST",
       body: JSON.stringify({ text: body }),
     });
@@ -205,14 +211,24 @@ export async function ensureInbox(businessId: number, businessName: string): Pro
       return null;
     }
 
+    // Already provisioned — return immediately
     if (business.emailInboxId) {
       return { id: business.emailInboxId, emailAddress: business.emailAddress ?? "" };
     }
 
-    const inbox = await createInbox(`${businessName} — Bob AI`);
-    if (!inbox) {
-      logger.warn({ businessId }, "ensureInbox: inbox creation failed");
-      return null;
+    // Try to get an existing inbox first (shared inbox strategy for plan limits)
+    let inbox: AgentMailInbox | null = null;
+    const existingInboxes = await listInboxes();
+    if (existingInboxes.length > 0) {
+      inbox = existingInboxes[0];
+      logger.info({ businessId, inboxId: inbox.id }, "ensureInbox: reusing existing shared inbox");
+    } else {
+      // Try creating a new inbox (may fail if plan limit reached)
+      inbox = await createInbox(`${businessName} — Bob AI`);
+      if (!inbox) {
+        logger.warn({ businessId }, "ensureInbox: inbox creation failed (plan limit?)");
+        return null;
+      }
     }
 
     await db.update(businessesTable)
