@@ -1,10 +1,9 @@
-import { eq, inArray, and, desc } from "drizzle-orm";
-import { db, tasksTable, taskCommentsTable, businessesTable, businessArtifactsTable, businessSitesTable, outreachEmailsTable, ceoReviewsTable } from "@workspace/db";
+import { eq, inArray, and } from "drizzle-orm";
+import { db, tasksTable, taskCommentsTable, businessesTable, businessArtifactsTable, businessSitesTable, outreachEmailsTable } from "@workspace/db";
 import { openai } from "@workspace/integrations-openai-ai-server";
 import { listMessages, sendEmail } from "../lib/agentmail";
 import { sendScheduledEmails } from "../routes/email";
 import { logger } from "../lib/logger";
-import { CEO_SKILL_SUMMARY } from "../lib/ceo-skill";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -13,7 +12,6 @@ const TASK_WORK_INTERVAL_MS = 2.5 * 60_000; // Each task gets a new work cycle e
 const STALL_THRESHOLD_MS = 6 * 60_000;      // After 6 min with no update, task is considered stalled
 const INBOX_CHECK_INTERVAL_MS = 5 * 60_000; // Check inboxes every 5 min
 const SCHEDULED_EMAIL_INTERVAL_MS = 60 * 60_000; // Send scheduled emails every hour
-const CEO_REVIEW_INTERVAL_MS = 5 * 60_000;  // CEO review runs every 5 minutes
 
 // ─── State ────────────────────────────────────────────────────────────────────
 
@@ -31,8 +29,6 @@ let orchestratorRunning = false;
 let lastInboxCheckAt = 0;
 // Timestamp of last scheduled email send
 let lastScheduledEmailAt = 0;
-// Timestamp of last CEO review run
-let lastCeoReviewAt = 0;
 
 // ─── Agent names ──────────────────────────────────────────────────────────────
 
@@ -91,17 +87,6 @@ async function executeTask(
   const systemPrompt = `You are ${agentName}, an autonomous AI agent working on a business task to reach $100k revenue in 30 days.
 
 You have been granted authority to create accounts and sign up to platforms on behalf of the business. The only thing requiring human approval is spending real money.
-
-## CEO OPERATING PRIORITIES (Apply Every Cycle)
-You are not just a task executor — you are an agent operating with CEO-level discipline.
-Prioritize your actions in this order every single cycle:
-1. **DISTRIBUTION first** — Can customers find and reach this business? If not, fix that before anything else.
-2. **PRODUCT second** — Does the core offer work? Is it 10x better than doing nothing?
-3. **REVENUE third** — Are we getting paid? Even $1 of revenue beats $0.
-Fight fires in this hierarchy. Let everything else burn.
-
-When executing any task, ask: "Does this action move our one key metric — revenue or path to revenue?" If no, deprioritize it.
-Flag immediately if this business looks **default dead** (no revenue path, burning resources with no customers).
 
 ## IDENTITY — USE THESE CREDENTIALS FOR ALL SIGNUPS:
 - Name: Bob
@@ -401,119 +386,6 @@ Reply with ONLY the email body text — no subject line, no metadata.`;
   }
 }
 
-// ─── CEO Review Tick ──────────────────────────────────────────────────────────
-
-async function ceoReviewTick() {
-  try {
-    const businesses = await db.select().from(businessesTable);
-    const activeBusinesses = businesses.filter(b => b.status === "active" || b.status === "planning");
-    if (activeBusinesses.length === 0) return;
-
-    logger.info({ count: activeBusinesses.length }, "CEO review tick: reviewing businesses");
-
-    for (const business of activeBusinesses) {
-      try {
-        const tasks = await db.select().from(tasksTable).where(eq(tasksTable.businessId, business.id));
-        const artifacts = await db.select().from(businessArtifactsTable)
-          .where(eq(businessArtifactsTable.businessId, business.id))
-          .limit(5);
-
-        const openTasks = tasks.filter(t => t.status === "open").length;
-        const inProgressTasks = tasks.filter(t => t.status === "in_progress").length;
-        const closedTasks = tasks.filter(t => t.status === "closed").length;
-        const waitingTasks = tasks.filter(t => t.status === "waiting_approval").length;
-        const totalTasks = tasks.length;
-        const completionRate = totalTasks > 0 ? Math.round((closedTasks / totalTasks) * 100) : 0;
-
-        const artifactSummary = artifacts
-          .map(a => `[${a.artifactType}] ${a.title}: ${a.content.slice(0, 150)}`)
-          .join("\n");
-
-        const taskSummary = tasks.slice(0, 10)
-          .map(t => `- [${t.status}] ${t.title} (${t.agentType ?? "unknown"} agent)`)
-          .join("\n");
-
-        const prompt = `${CEO_SKILL_SUMMARY}
-
----
-
-You are performing a CEO Review of this business. Apply the CEO Operating Framework above to assess the current state.
-
-## Business State
-Name: ${business.name}
-Description: ${business.description}
-Platform: ${business.platform}
-Target Revenue (30 days): ${business.targetRevenue30d}
-Investment Available: ${business.investmentNeeded}
-Status: ${business.status}
-Task Completion: ${closedTasks}/${totalTasks} (${completionRate}%)
-Open: ${openTasks} | In Progress: ${inProgressTasks} | Waiting Approval: ${waitingTasks} | Closed: ${closedTasks}
-
-## Current Tasks
-${taskSummary || "No tasks yet"}
-
-## Recent Work Artifacts
-${artifactSummary || "No artifacts yet"}
-
----
-
-Produce a CEO assessment. Apply the frameworks above. Be specific and actionable — not generic.
-
-Respond with ONLY valid JSON:
-{
-  "mode": "wartime" | "peacetime",
-  "oneMetric": "The single most important metric to track right now (one short phrase, e.g. 'Outreach emails sent per day')",
-  "oneMetricValue": "Current estimated value of that metric based on the task/artifact data (e.g. '0 — not started' or '3 emails drafted')",
-  "runwayStatus": "alive" | "at_risk" | "dead",
-  "topPriority": "The #1 thing Bob must do next — specific action, not generic advice (1-2 sentences)",
-  "summary": "2-3 sentence CEO-level assessment covering: what mode we're in, why, and the most critical bottleneck right now"
-}`;
-
-        const response = await openai.chat.completions.create({
-          model: "gpt-5.2",
-          max_completion_tokens: 1024,
-          messages: [{ role: "user", content: prompt }],
-        });
-
-        const raw = response.choices[0]?.message?.content ?? "{}";
-        let assessment: {
-          mode: string;
-          oneMetric: string;
-          oneMetricValue: string;
-          runwayStatus: string;
-          topPriority: string;
-          summary: string;
-        };
-
-        try {
-          const jsonMatch = raw.match(/\{[\s\S]*\}/);
-          assessment = jsonMatch ? JSON.parse(jsonMatch[0]) : null;
-          if (!assessment?.mode || !assessment?.oneMetric) throw new Error("Invalid assessment format");
-        } catch (parseErr) {
-          logger.warn({ businessId: business.id, parseErr }, "CEO review: failed to parse assessment JSON");
-          continue;
-        }
-
-        await db.insert(ceoReviewsTable).values({
-          businessId: business.id,
-          mode: assessment.mode ?? "wartime",
-          oneMetric: assessment.oneMetric ?? "Revenue generated",
-          oneMetricValue: assessment.oneMetricValue ?? "Unknown",
-          runwayStatus: assessment.runwayStatus ?? "at_risk",
-          topPriority: assessment.topPriority ?? "Start generating revenue",
-          summary: assessment.summary ?? "",
-        });
-
-        logger.info({ businessId: business.id, mode: assessment.mode, runwayStatus: assessment.runwayStatus }, "CEO review: assessment stored");
-      } catch (bizErr) {
-        logger.error({ businessId: business.id, bizErr }, "CEO review: failed for business");
-      }
-    }
-  } catch (err) {
-    logger.error({ err }, "CEO review tick: fatal error");
-  }
-}
-
 // ─── Orchestrator Monitor Tick ────────────────────────────────────────────────
 
 async function orchestratorTick() {
@@ -640,12 +512,6 @@ async function orchestratorTick() {
     if (now - lastScheduledEmailAt >= SCHEDULED_EMAIL_INTERVAL_MS) {
       lastScheduledEmailAt = now;
       sendScheduledEmails().catch(err => logger.error({ err }, "Scheduled email send failed"));
-    }
-
-    // CEO review every 5 minutes
-    if (now - lastCeoReviewAt >= CEO_REVIEW_INTERVAL_MS) {
-      lastCeoReviewAt = now;
-      ceoReviewTick().catch(err => logger.error({ err }, "CEO review tick failed"));
     }
   } catch (err) {
     logger.error({ err }, "Orchestrator tick failed");

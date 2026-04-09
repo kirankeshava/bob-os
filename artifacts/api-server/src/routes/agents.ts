@@ -6,7 +6,6 @@ import { GetAgentRunParams, TriggerOrchestrateParams } from "@workspace/api-zod"
 import { logger } from "../lib/logger";
 import { triggerExecutionCycle } from "../services/task-executor";
 import { ensureInbox } from "../lib/agentmail";
-import { CEO_SKILL_SUMMARY } from "../lib/ceo-skill";
 
 const router = Router();
 
@@ -134,18 +133,7 @@ async function runOrchestratorAgent(runId: number, businessId: number) {
     .from(tasksTable)
     .where(eq(tasksTable.businessId, businessId));
 
-  const systemPrompt = `You are an expert Orchestrator AI agent managing a business project. You operate with CEO-level strategic discipline — you don't just break down tasks, you plan for revenue with focus and urgency.
-
-${CEO_SKILL_SUMMARY}
-
----
-
-Apply the CEO framework above when planning tasks. Specifically:
-- **Prioritize distribution tasks first** — customers must be able to find and reach the business before anything else matters
-- **Product second** — the core offer must work before optimizing
-- **Revenue-generating tasks get CRITICAL priority** — outreach, sales, pitching, monetization setup
-- **Only plan one layer at a time** — do not plan for hypothetical future stages
-- **Assess default alive/dead** — if there's no revenue path in these tasks, flag it in the first task's description
+  const systemPrompt = `You are an expert Orchestrator AI agent managing a business project. Create a detailed task breakdown for this business to achieve its revenue target in 30 days.
 
 Return ONLY a JSON array of task objects with this structure:
 {
@@ -158,7 +146,7 @@ Return ONLY a JSON array of task objects with this structure:
   "status": "open"
 }
 
-Create 5-8 actionable tasks across different agent types. The first 2 tasks MUST be distribution/outreach focused. Focus on tasks that directly and immediately drive revenue.`;
+Create 5-8 actionable tasks across different agent types. Focus on tasks that directly drive revenue.`;
 
   const existingTaskList = existingTasks.map((t) => `- ${t.title} (${t.status})`).join("\n");
 
