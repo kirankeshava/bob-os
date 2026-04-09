@@ -2,6 +2,7 @@ import { ReplitConnectors } from "@replit/connectors-sdk";
 import { createHash } from "crypto";
 import { readFileSync, readdirSync, statSync } from "fs";
 import { join, relative } from "path";
+import { fileURLToPath } from "url";
 import { db, businessArtifactsTable, businessesTable } from "@workspace/db";
 import { logger } from "../lib/logger";
 
@@ -64,6 +65,22 @@ function githubBlobSha(content: Buffer): string {
   hash.update(Buffer.from(header, "binary"));
   hash.update(content);
   return hash.digest("hex");
+}
+
+function findWorkspaceRoot(): string {
+  const scriptDir = fileURLToPath(new URL(".", import.meta.url));
+  let dir = scriptDir;
+  for (let i = 0; i < 10; i++) {
+    try {
+      statSync(join(dir, "pnpm-workspace.yaml"));
+      return dir;
+    } catch {
+      const parent = join(dir, "..");
+      if (parent === dir) break;
+      dir = parent;
+    }
+  }
+  return join(process.cwd(), "..", "..");
 }
 
 function collectSourceFiles(rootDir: string): Map<string, Buffer> {
@@ -260,7 +277,7 @@ async function runSync() {
       await loadBaseline(connectors, owner, repoName);
     }
 
-    const repoRoot = join(process.cwd(), "..", "..");
+    const repoRoot = findWorkspaceRoot();
     const sourceFiles = collectSourceFiles(repoRoot);
     const generatedFiles = await buildGeneratedArtifacts();
     const allFiles = new Map<string, Buffer>([...sourceFiles, ...generatedFiles]);
