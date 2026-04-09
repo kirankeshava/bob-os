@@ -417,6 +417,44 @@ paths:
                 items:
                   $ref: "#/components/schemas/OutreachEmail"
 
+  /businesses/{businessId}/inbox/onboard:
+    post:
+      operationId: onboardContact
+      tags: [businesses]
+      summary: Start an AI-generated onboarding email sequence for a contact
+      parameters:
+        - name: businessId
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OnboardContactBody"
+      responses:
+        "200":
+          description: Onboarding sequence created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  sequenceCount:
+                    type: integer
+                  emails:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/OutreachEmail"
+                required:
+                  - success
+                  - sequenceCount
+                  - emails
+
   /businesses/{businessId}/artifacts:
     get:
       operationId: listBusinessArtifacts
@@ -674,6 +712,10 @@ components:
           type: ["number", "null"]
         agentNotes:
           type: ["string", "null"]
+        emailInboxId:
+          type: ["string", "null"]
+        emailAddress:
+          type: ["string", "null"]
         createdAt:
           type: string
         updatedAt:
@@ -693,6 +735,8 @@ components:
         - costBenefitScore
         - marketDemandScore
         - agentNotes
+        - emailInboxId
+        - emailAddress
         - createdAt
         - updatedAt
 
@@ -1102,6 +1146,8 @@ components:
           type: ["string", "null"]
         sentAt:
           type: ["string", "null"]
+        scheduledFor:
+          type: ["string", "null"]
         createdAt:
           type: string
         updatedAt:
@@ -1114,6 +1160,18 @@ components:
         - status
         - createdAt
         - updatedAt
+
+    OnboardContactBody:
+      type: object
+      properties:
+        to:
+          type: string
+        contactName:
+          type: ["string", "null"]
+        context:
+          type: ["string", "null"]
+      required:
+        - to
 
     SyncStatus:
       type: object

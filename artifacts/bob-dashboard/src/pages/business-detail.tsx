@@ -6,16 +6,20 @@ import {
   useListBusinessTasks, getListBusinessTasksQueryKey,
   useListBusinessArtifacts, getListBusinessArtifactsQueryKey,
   useGetBusinessSite, getGetBusinessSiteQueryKey,
+  useGetBusinessInbox, getGetBusinessInboxQueryKey,
   useGenerateBusinessSite,
   useUpdateTask,
   useCreateTaskComment,
   useTriggerOrchestrate,
-  Task, TaskStatus, BusinessArtifact,
+  useSendBusinessEmail,
+  useOnboardContact,
+  Task, TaskStatus, BusinessArtifact, OutreachEmail,
 } from "@workspace/api-client-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { Input } from "@/components/ui/input";
 import { AgentBadge } from "@/components/agent-badge";
 import {
   ArrowLeft, Play, AlertCircle, Loader2, CheckCircle2,
@@ -24,6 +28,7 @@ import {
   PenLine, Table2, ScrollText, ChevronDown, ChevronUp,
   MessageSquare, Send, DollarSign, UserPlus, X,
   Banknote, ShieldAlert, Globe, Mail, ExternalLink, Zap,
+  Inbox, Copy, Plus, Users, ArrowUpRight, ArrowDownLeft,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useQueryClient } from "@tanstack/react-query";
@@ -301,6 +306,371 @@ function InlineMessage({ taskId, onSend, onClose }: InlineMessageProps) {
   );
 }
 
+// ─── Inbox Tab ────────────────────────────────────────────────────────────────
+
+interface ComposeModalProps {
+  businessId: number;
+  businessName: string;
+  emailAddress: string | null | undefined;
+  onClose: () => void;
+  initialTo?: string;
+  initialSubject?: string;
+  onboarding?: boolean;
+}
+
+function ComposeModal({ businessId, businessName, emailAddress, onClose, initialTo = "", initialSubject = "", onboarding = false }: ComposeModalProps) {
+  const [to, setTo] = useState(initialTo);
+  const [subject, setSubject] = useState(initialSubject);
+  const [body, setBody] = useState("");
+  const [contactName, setContactName] = useState("");
+  const [isSending, setIsSending] = useState(false);
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+
+  const sendEmail = useSendBusinessEmail();
+  const onboardContact = useOnboardContact();
+
+  const handleSend = () => {
+    if (!to || !subject || !body) {
+      toast({ title: "Missing fields", description: "Please fill in all fields.", variant: "destructive" });
+      return;
+    }
+    setIsSending(true);
+    sendEmail.mutate({ businessId, data: { to, subject, body } }, {
+      onSuccess: () => {
+        toast({ title: "Email Sent", description: `Message sent to ${to}` });
+        queryClient.invalidateQueries({ queryKey: getGetBusinessInboxQueryKey(businessId) });
+        onClose();
+      },
+      onError: () => {
+        toast({ title: "Error", description: "Failed to send email.", variant: "destructive" });
+        setIsSending(false);
+      },
+    });
+  };
+
+  const handleOnboard = () => {
+    if (!to) {
+      toast({ title: "Missing email", description: "Please enter a recipient email.", variant: "destructive" });
+      return;
+    }
+    setIsSending(true);
+    onboardContact.mutate({ businessId, data: { to, contactName: contactName || undefined } }, {
+      onSuccess: (data) => {
+        toast({ title: "Onboarding Started!", description: `${data.sequenceCount} emails scheduled for ${to}` });
+        queryClient.invalidateQueries({ queryKey: getGetBusinessInboxQueryKey(businessId) });
+        onClose();
+      },
+      onError: () => {
+        toast({ title: "Error", description: "Failed to start onboarding.", variant: "destructive" });
+        setIsSending(false);
+      },
+    });
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+      <Card className="w-full max-w-lg bg-card border-border shadow-2xl">
+        <CardContent className="p-4">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="font-bold font-mono uppercase text-sm tracking-wider">
+              {onboarding ? "Start Onboarding Sequence" : "Compose Email"}
+            </h3>
+            <Button variant="ghost" size="icon" className="h-6 w-6" onClick={onClose}>
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
+
+          {emailAddress && (
+            <p className="text-[10px] text-muted-foreground font-mono mb-3">
+              From: <span className="text-green-400">{emailAddress}</span>
+            </p>
+          )}
+
+          <div className="space-y-2">
+            <div>
+              <label className="text-[10px] text-muted-foreground font-mono uppercase block mb-1">To</label>
+              <Input
+                value={to}
+                onChange={e => setTo(e.target.value)}
+                placeholder="recipient@example.com"
+                className="text-xs font-mono h-8 border-border/50 bg-muted/10"
+              />
+            </div>
+
+            {onboarding && (
+              <div>
+                <label className="text-[10px] text-muted-foreground font-mono uppercase block mb-1">Contact Name (optional)</label>
+                <Input
+                  value={contactName}
+                  onChange={e => setContactName(e.target.value)}
+                  placeholder="John"
+                  className="text-xs font-mono h-8 border-border/50 bg-muted/10"
+                />
+              </div>
+            )}
+
+            {!onboarding && (
+              <>
+                <div>
+                  <label className="text-[10px] text-muted-foreground font-mono uppercase block mb-1">Subject</label>
+                  <Input
+                    value={subject}
+                    onChange={e => setSubject(e.target.value)}
+                    placeholder="Subject"
+                    className="text-xs font-mono h-8 border-border/50 bg-muted/10"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] text-muted-foreground font-mono uppercase block mb-1">Body</label>
+                  <Textarea
+                    value={body}
+                    onChange={e => setBody(e.target.value)}
+                    placeholder="Write your message..."
+                    className="text-xs font-mono min-h-[100px] resize-none border-border/50 bg-muted/10"
+                  />
+                </div>
+              </>
+            )}
+
+            {onboarding && (
+              <div className="bg-blue-500/10 border border-blue-500/20 rounded p-2">
+                <p className="text-[10px] text-blue-400 font-mono">
+                  AI will generate a 3-email sequence: welcome (now), value prop (+2 days), CTA (+5 days)
+                </p>
+              </div>
+            )}
+          </div>
+
+          <div className="flex gap-2 mt-4">
+            {onboarding ? (
+              <Button
+                className="flex-1 font-mono text-xs h-8 bg-blue-600 hover:bg-blue-500"
+                onClick={handleOnboard}
+                disabled={isSending}
+              >
+                {isSending ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <Users className="mr-1 h-3 w-3" />}
+                Start Onboarding
+              </Button>
+            ) : (
+              <>
+                <Button
+                  className="flex-1 font-mono text-xs h-8"
+                  onClick={handleSend}
+                  disabled={isSending}
+                >
+                  {isSending ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <Send className="mr-1 h-3 w-3" />}
+                  Send
+                </Button>
+                <Button
+                  variant="outline"
+                  className="font-mono text-xs h-8 border-blue-500/30 text-blue-400 hover:text-blue-300"
+                  onClick={() => {
+                    setSubject(`Welcome to ${businessName}`);
+                    onboardContact.mutate({ businessId, data: { to } }, {
+                      onSuccess: (data) => {
+                        toast({ title: "Onboarding Started!", description: `${data.sequenceCount} emails scheduled for ${to}` });
+                        queryClient.invalidateQueries({ queryKey: getGetBusinessInboxQueryKey(businessId) });
+                        onClose();
+                      },
+                      onError: () => toast({ title: "Error", description: "Failed to start onboarding.", variant: "destructive" }),
+                    });
+                  }}
+                  disabled={!to || isSending}
+                >
+                  <Users className="mr-1 h-3 w-3" />
+                  Onboard
+                </Button>
+              </>
+            )}
+            <Button variant="ghost" className="font-mono text-xs h-8" onClick={onClose}>Cancel</Button>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function EmailRow({ email }: { email: OutreachEmail }) {
+  const [expanded, setExpanded] = useState(false);
+  const isInbound = email.direction === "inbound";
+
+  return (
+    <div
+      className={`border rounded-md mb-1.5 cursor-pointer transition-colors ${
+        isInbound
+          ? "border-blue-500/20 bg-blue-500/5 hover:border-blue-500/40"
+          : "border-border/30 bg-card/30 hover:border-border/60"
+      }`}
+      onClick={() => setExpanded(e => !e)}
+    >
+      <div className="p-2.5">
+        <div className="flex items-center gap-2">
+          {isInbound
+            ? <ArrowDownLeft className="h-3 w-3 text-blue-400 shrink-0" />
+            : <ArrowUpRight className="h-3 w-3 text-green-400 shrink-0" />
+          }
+          <span className={`text-[10px] font-mono uppercase font-bold shrink-0 ${isInbound ? "text-blue-400" : "text-green-400"}`}>
+            {isInbound ? "IN" : "OUT"}
+          </span>
+          <span className="text-xs font-mono text-muted-foreground truncate flex-1">
+            {isInbound ? email.fromAddress : email.toAddress}
+          </span>
+          <Badge variant="outline" className={`text-[9px] font-mono px-1 py-0 shrink-0 ${
+            email.status === "sent" ? "border-green-500/30 text-green-400"
+            : email.status === "pending" ? "border-yellow-500/30 text-yellow-400"
+            : email.status === "failed" ? "border-red-500/30 text-red-400"
+            : email.status === "received" ? "border-blue-500/30 text-blue-400"
+            : "border-border/50 text-muted-foreground"
+          }`}>
+            {email.status}
+          </Badge>
+          <span className="text-[9px] text-muted-foreground/60 font-mono shrink-0">
+            {timeAgo(email.sentAt || email.scheduledFor || email.createdAt)}
+          </span>
+        </div>
+        {email.subject && (
+          <p className="text-xs font-medium mt-1 ml-5 text-foreground/80 truncate">{email.subject}</p>
+        )}
+        {expanded && email.body && (
+          <div className="mt-2 ml-5 p-2 bg-muted/20 rounded border border-border/20">
+            <pre className="text-[10px] text-muted-foreground whitespace-pre-wrap font-mono leading-relaxed">{email.body}</pre>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+interface InboxTabProps {
+  businessId: number;
+  businessName: string;
+  business: { emailInboxId?: string | null; emailAddress?: string | null };
+}
+
+function InboxTab({ businessId, businessName, business }: InboxTabProps) {
+  const { data: inboxData, isLoading } = useGetBusinessInbox(businessId, {
+    query: { enabled: !!businessId, queryKey: getGetBusinessInboxQueryKey(businessId), refetchInterval: 60000 },
+  });
+  const [showCompose, setShowCompose] = useState(false);
+  const [composeOnboarding, setComposeOnboarding] = useState(false);
+  const { toast } = useToast();
+
+  const emailAddress = business.emailAddress ?? inboxData?.emailAddress;
+  const messages = inboxData?.logged ?? [];
+  const inboundCount = messages.filter(m => m.direction === "inbound" && m.status === "received").length;
+
+  const copyEmail = () => {
+    if (emailAddress) {
+      navigator.clipboard.writeText(emailAddress);
+      toast({ title: "Copied!", description: "Email address copied to clipboard." });
+    }
+  };
+
+  return (
+    <div className="space-y-3">
+      {/* Email address header */}
+      <Card className="border-border/50 bg-card/30">
+        <CardContent className="p-3">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div className="flex items-center gap-3">
+              <div className="p-2 rounded-lg bg-green-500/10 border border-green-500/20">
+                <Mail className="h-4 w-4 text-green-400" />
+              </div>
+              <div>
+                <p className="text-[10px] text-muted-foreground uppercase font-mono">Business Email Inbox</p>
+                {emailAddress ? (
+                  <div className="flex items-center gap-2 mt-0.5">
+                    <span className="text-sm font-mono text-green-400 font-medium">{emailAddress}</span>
+                    <button onClick={copyEmail} className="text-muted-foreground/50 hover:text-muted-foreground transition-colors">
+                      <Copy className="h-3 w-3" />
+                    </button>
+                    <Badge variant="outline" className="text-[9px] font-mono border-green-500/30 text-green-400 bg-green-500/10 px-1.5 py-0">
+                      ✓ Active
+                    </Badge>
+                  </div>
+                ) : (
+                  <p className="text-xs text-muted-foreground/70 mt-0.5">
+                    {isLoading ? "Loading..." : "No inbox provisioned yet — provisioning in background"}
+                  </p>
+                )}
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                className="font-mono text-xs h-7 border-blue-500/30 text-blue-400 hover:text-blue-300"
+                onClick={() => { setComposeOnboarding(true); setShowCompose(true); }}
+              >
+                <Users className="mr-1 h-3 w-3" />
+                Onboard Contact
+              </Button>
+              <Button
+                size="sm"
+                className="font-mono text-xs h-7 bg-primary hover:bg-primary/90"
+                onClick={() => { setComposeOnboarding(false); setShowCompose(true); }}
+                disabled={!emailAddress}
+              >
+                <Plus className="mr-1 h-3 w-3" />
+                Compose
+              </Button>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Stats */}
+      <div className="flex items-center gap-3 text-xs font-mono text-muted-foreground">
+        <span className="flex items-center gap-1">
+          <Inbox className="h-3 w-3" />
+          {messages.length} total messages
+        </span>
+        {inboundCount > 0 && (
+          <span className="flex items-center gap-1 text-blue-400">
+            <ArrowDownLeft className="h-3 w-3" />
+            {inboundCount} unread inbound
+          </span>
+        )}
+      </div>
+
+      {/* Message list */}
+      {isLoading ? (
+        <div className="space-y-1.5">
+          {[1, 2, 3].map(i => <div key={i} className="h-12 bg-muted/20 rounded animate-pulse" />)}
+        </div>
+      ) : messages.length === 0 ? (
+        <Card className="border-dashed border-border/40 bg-card/10">
+          <CardContent className="p-8 text-center">
+            <Inbox className="h-10 w-10 text-muted-foreground/20 mx-auto mb-3" />
+            <p className="text-sm font-medium text-muted-foreground">No messages yet</p>
+            <p className="text-xs text-muted-foreground/60 mt-1">
+              Use Compose to send your first email, or Start Onboarding to welcome a new contact
+            </p>
+          </CardContent>
+        </Card>
+      ) : (
+        <div>
+          {messages.map(email => (
+            <EmailRow key={email.id} email={email} />
+          ))}
+        </div>
+      )}
+
+      {showCompose && (
+        <ComposeModal
+          businessId={businessId}
+          businessName={businessName}
+          emailAddress={emailAddress}
+          onClose={() => setShowCompose(false)}
+          onboarding={composeOnboarding}
+          initialSubject={composeOnboarding ? `Welcome to ${businessName}` : ""}
+        />
+      )}
+    </div>
+  );
+}
+
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export default function BusinessDetail() {
@@ -333,6 +703,7 @@ export default function BusinessDetail() {
   const [approvingId, setApprovingId] = useState<number | null>(null);
   const [messageOpenId, setMessageOpenId] = useState<number | null>(null);
   const [isGeneratingSite, setIsGeneratingSite] = useState(false);
+  const [activeTab, setActiveTab] = useState<"tasks" | "inbox">("tasks");
 
   const siteUrl = `${window.location.origin}${import.meta.env.BASE_URL.replace(/\/$/, "")}/sites/${businessId}`;
 
@@ -646,83 +1017,129 @@ export default function BusinessDetail() {
         </div>
       )}
 
-      {/* Main layout */}
-      {isLoadingTasks ? (
-        <div className="flex items-center justify-center h-40"><Loader2 className="h-8 w-8 animate-spin text-primary/50" /></div>
-      ) : !hasTasks ? (
-        <Card className="bg-card/20 border-dashed py-12 text-center">
-          <div className="flex flex-col items-center gap-3">
-            <Cpu className="h-10 w-10 text-primary/20" />
-            <p className="text-muted-foreground font-medium">No tasks yet</p>
-            <p className="text-sm text-muted-foreground/70 max-w-sm">Click "Create Task Plan" to have the Orchestrator assign agents to this business.</p>
-          </div>
-        </Card>
-      ) : (
-        <div className="grid grid-cols-1 xl:grid-cols-[1fr_340px] gap-4 items-start">
-          {/* Kanban */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-            {/* Open */}
-            <div className="bg-muted/10 rounded-lg p-3 border border-border/40">
-              <div className="flex items-center justify-between mb-3 border-b border-border/50 pb-2">
-                <h3 className="font-semibold font-mono uppercase text-xs tracking-wider">Open</h3>
-                <Badge variant="secondary" className="font-mono text-xs">{openTasks.length}</Badge>
-              </div>
-              <div data-testid="kanban-col-open">
-                {openTasks.map(renderTaskCard)}
-                {openTasks.length === 0 && <div className="h-16 border border-dashed border-border/50 rounded flex items-center justify-center text-muted-foreground text-[10px] uppercase font-mono">No Open Tasks</div>}
-              </div>
-            </div>
+      {/* Tab Navigation */}
+      <div className="flex items-center gap-1 border-b border-border/50 pb-0">
+        <button
+          className={`flex items-center gap-1.5 px-3 py-2 text-xs font-mono uppercase tracking-wider transition-colors border-b-2 -mb-px ${
+            activeTab === "tasks"
+              ? "border-primary text-primary"
+              : "border-transparent text-muted-foreground hover:text-foreground"
+          }`}
+          onClick={() => setActiveTab("tasks")}
+        >
+          <Cpu className="h-3 w-3" />
+          Tasks
+          {(tasks?.length ?? 0) > 0 && (
+            <Badge variant="secondary" className="font-mono text-[9px] px-1 py-0 ml-0.5">{tasks?.length}</Badge>
+          )}
+        </button>
+        <button
+          className={`flex items-center gap-1.5 px-3 py-2 text-xs font-mono uppercase tracking-wider transition-colors border-b-2 -mb-px ${
+            activeTab === "inbox"
+              ? "border-green-500 text-green-400"
+              : "border-transparent text-muted-foreground hover:text-foreground"
+          }`}
+          onClick={() => setActiveTab("inbox")}
+        >
+          <Inbox className="h-3 w-3" />
+          Inbox
+          {business.emailAddress && (
+            <span className="h-1.5 w-1.5 rounded-full bg-green-500 inline-block ml-0.5" />
+          )}
+        </button>
+      </div>
 
-            {/* In Progress */}
-            <div className="bg-blue-900/5 rounded-lg p-3 border border-blue-900/20">
-              <div className="flex items-center justify-between mb-3 border-b border-blue-900/30 pb-2">
-                <h3 className="font-semibold font-mono uppercase text-xs tracking-wider text-blue-400 flex items-center gap-1.5">
-                  In Progress
-                  {inProgressTasks.length > 0 && <span className="h-1.5 w-1.5 rounded-full bg-blue-500 animate-pulse inline-block" />}
-                </h3>
-                <Badge variant="secondary" className="font-mono text-xs bg-blue-900/40 text-blue-300">{inProgressTasks.length}</Badge>
+      {/* Tasks Tab */}
+      {activeTab === "tasks" && (
+        <>
+          {/* Main layout */}
+          {isLoadingTasks ? (
+            <div className="flex items-center justify-center h-40"><Loader2 className="h-8 w-8 animate-spin text-primary/50" /></div>
+          ) : !hasTasks ? (
+            <Card className="bg-card/20 border-dashed py-12 text-center">
+              <div className="flex flex-col items-center gap-3">
+                <Cpu className="h-10 w-10 text-primary/20" />
+                <p className="text-muted-foreground font-medium">No tasks yet</p>
+                <p className="text-sm text-muted-foreground/70 max-w-sm">Click "Create Task Plan" to have the Orchestrator assign agents to this business.</p>
               </div>
-              <div data-testid="kanban-col-inprogress">
-                {inProgressTasks.map(renderTaskCard)}
-                {inProgressTasks.length === 0 && <div className="h-16 border border-dashed border-blue-900/30 rounded flex items-center justify-center text-blue-500/50 text-[10px] uppercase font-mono">Nothing In Progress</div>}
-              </div>
-            </div>
+            </Card>
+          ) : (
+            <div className="grid grid-cols-1 xl:grid-cols-[1fr_340px] gap-4 items-start">
+              {/* Kanban */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                {/* Open */}
+                <div className="bg-muted/10 rounded-lg p-3 border border-border/40">
+                  <div className="flex items-center justify-between mb-3 border-b border-border/50 pb-2">
+                    <h3 className="font-semibold font-mono uppercase text-xs tracking-wider">Open</h3>
+                    <Badge variant="secondary" className="font-mono text-xs">{openTasks.length}</Badge>
+                  </div>
+                  <div data-testid="kanban-col-open">
+                    {openTasks.map(renderTaskCard)}
+                    {openTasks.length === 0 && <div className="h-16 border border-dashed border-border/50 rounded flex items-center justify-center text-muted-foreground text-[10px] uppercase font-mono">No Open Tasks</div>}
+                  </div>
+                </div>
 
-            {/* Closed */}
-            <div className="bg-green-900/5 rounded-lg p-3 border border-green-900/20">
-              <div className="flex items-center justify-between mb-3 border-b border-green-900/30 pb-2">
-                <h3 className="font-semibold font-mono uppercase text-xs tracking-wider text-green-400">Closed</h3>
-                <Badge variant="secondary" className="font-mono text-xs bg-green-900/40 text-green-300">{closedTasks.length}</Badge>
-              </div>
-              <div data-testid="kanban-col-closed">
-                {closedTasks.map(renderTaskCard)}
-                {closedTasks.length === 0 && <div className="h-16 border border-dashed border-green-900/30 rounded flex items-center justify-center text-green-500/50 text-[10px] uppercase font-mono">Nothing Closed Yet</div>}
-              </div>
-            </div>
-          </div>
+                {/* In Progress */}
+                <div className="bg-blue-900/5 rounded-lg p-3 border border-blue-900/20">
+                  <div className="flex items-center justify-between mb-3 border-b border-blue-900/30 pb-2">
+                    <h3 className="font-semibold font-mono uppercase text-xs tracking-wider text-blue-400 flex items-center gap-1.5">
+                      In Progress
+                      {inProgressTasks.length > 0 && <span className="h-1.5 w-1.5 rounded-full bg-blue-500 animate-pulse inline-block" />}
+                    </h3>
+                    <Badge variant="secondary" className="font-mono text-xs bg-blue-900/40 text-blue-300">{inProgressTasks.length}</Badge>
+                  </div>
+                  <div data-testid="kanban-col-inprogress">
+                    {inProgressTasks.map(renderTaskCard)}
+                    {inProgressTasks.length === 0 && <div className="h-16 border border-dashed border-blue-900/30 rounded flex items-center justify-center text-blue-500/50 text-[10px] uppercase font-mono">Nothing In Progress</div>}
+                  </div>
+                </div>
 
-          {/* Artifacts Panel */}
-          <div className="space-y-3" data-testid="artifacts-panel">
-            <div className="flex items-center gap-2 border-l-2 border-yellow-500/60 pl-3">
-              <FileText className="h-4 w-4 text-yellow-400" />
-              <h2 className="text-sm font-bold font-mono uppercase tracking-wider text-yellow-400">Project Documents</h2>
-              {artifacts && artifacts.length > 0 && <Badge variant="secondary" className="font-mono text-xs ml-auto">{artifacts.length}</Badge>}
+                {/* Closed */}
+                <div className="bg-green-900/5 rounded-lg p-3 border border-green-900/20">
+                  <div className="flex items-center justify-between mb-3 border-b border-green-900/30 pb-2">
+                    <h3 className="font-semibold font-mono uppercase text-xs tracking-wider text-green-400">Closed</h3>
+                    <Badge variant="secondary" className="font-mono text-xs bg-green-900/40 text-green-300">{closedTasks.length}</Badge>
+                  </div>
+                  <div data-testid="kanban-col-closed">
+                    {closedTasks.map(renderTaskCard)}
+                    {closedTasks.length === 0 && <div className="h-16 border border-dashed border-green-900/30 rounded flex items-center justify-center text-green-500/50 text-[10px] uppercase font-mono">Nothing Closed Yet</div>}
+                  </div>
+                </div>
+              </div>
+
+              {/* Artifacts Panel */}
+              <div className="space-y-3" data-testid="artifacts-panel">
+                <div className="flex items-center gap-2 border-l-2 border-yellow-500/60 pl-3">
+                  <FileText className="h-4 w-4 text-yellow-400" />
+                  <h2 className="text-sm font-bold font-mono uppercase tracking-wider text-yellow-400">Project Documents</h2>
+                  {artifacts && artifacts.length > 0 && <Badge variant="secondary" className="font-mono text-xs ml-auto">{artifacts.length}</Badge>}
+                </div>
+                {isLoadingArtifacts ? (
+                  <div className="space-y-2">{[1, 2].map(i => <Card key={i} className="animate-pulse bg-muted/20 border-border/50 h-24" />)}</div>
+                ) : artifacts && artifacts.length > 0 ? (
+                  <div className="space-y-2">{artifacts.map(a => <ArtifactCard key={a.id} artifact={a} />)}</div>
+                ) : (
+                  <Card className="bg-card/20 border-dashed border-yellow-500/20">
+                    <CardContent className="p-4 text-center">
+                      <FileText className="h-8 w-8 text-yellow-500/20 mx-auto mb-2" />
+                      <p className="text-xs text-muted-foreground font-medium">No documents yet</p>
+                      <p className="text-[10px] text-muted-foreground/60 mt-1">Agents create documents, scripts, and templates as they work</p>
+                    </CardContent>
+                  </Card>
+                )}
+              </div>
             </div>
-            {isLoadingArtifacts ? (
-              <div className="space-y-2">{[1, 2].map(i => <Card key={i} className="animate-pulse bg-muted/20 border-border/50 h-24" />)}</div>
-            ) : artifacts && artifacts.length > 0 ? (
-              <div className="space-y-2">{artifacts.map(a => <ArtifactCard key={a.id} artifact={a} />)}</div>
-            ) : (
-              <Card className="bg-card/20 border-dashed border-yellow-500/20">
-                <CardContent className="p-4 text-center">
-                  <FileText className="h-8 w-8 text-yellow-500/20 mx-auto mb-2" />
-                  <p className="text-xs text-muted-foreground font-medium">No documents yet</p>
-                  <p className="text-[10px] text-muted-foreground/60 mt-1">Agents create documents, scripts, and templates as they work</p>
-                </CardContent>
-              </Card>
-            )}
-          </div>
-        </div>
+          )}
+        </>
+      )}
+
+      {/* Inbox Tab */}
+      {activeTab === "inbox" && (
+        <InboxTab
+          businessId={businessId}
+          businessName={business.name}
+          business={business}
+        />
       )}
     </div>
   );

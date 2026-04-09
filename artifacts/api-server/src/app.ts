@@ -5,6 +5,7 @@ import router from "./routes";
 import { logger } from "./lib/logger";
 import { startTaskExecutor } from "./services/task-executor";
 import { startGithubSync } from "./services/github-sync";
+import { provisionMissingInboxes } from "./services/email-provisioner";
 
 const app: Express = express();
 
@@ -35,5 +36,8 @@ app.use("/api", router);
 
 startTaskExecutor();
 startGithubSync();
+
+// Provision inboxes for any existing businesses that don't have one
+provisionMissingInboxes().catch(err => logger.error({ err }, "Failed to run startup inbox provisioner"));
 
 export default app;

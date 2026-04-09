@@ -17,6 +17,8 @@ export const businessesTable = pgTable("businesses", {
   costBenefitScore: real("cost_benefit_score"),
   marketDemandScore: real("market_demand_score"),
   agentNotes: text("agent_notes"),
+  emailInboxId: text("email_inbox_id"),
+  emailAddress: text("email_address"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });

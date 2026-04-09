@@ -2,7 +2,7 @@ import { Router } from "express";
 import { eq } from "drizzle-orm";
 import { db, businessesTable, businessSitesTable, businessArtifactsTable } from "@workspace/db";
 import { openai } from "@workspace/integrations-openai-ai-server";
-import { createInbox } from "../lib/agentmail";
+import { ensureInbox } from "../lib/agentmail";
 import { logger } from "../lib/logger";
 
 const router = Router({ mergeParams: true });
@@ -119,16 +119,16 @@ Make the content specific, compelling, and customer-focused. Respond ONLY with v
   // Check for existing site
   const [existing] = await db.select().from(businessSitesTable).where(eq(businessSitesTable.businessId, businessId));
 
-  let emailInboxId = existing?.emailInboxId ?? null;
-  let emailAddress = existing?.emailAddress ?? null;
+  // Inherit inbox from business (or provision one if still missing)
+  let emailInboxId = business.emailInboxId ?? existing?.emailInboxId ?? null;
+  let emailAddress = business.emailAddress ?? existing?.emailAddress ?? null;
 
-  // Create AgentMail inbox if not already created
   if (!emailInboxId) {
-    const inbox = await createInbox(`${business.name} — Bob AI`);
+    const inbox = await ensureInbox(businessId, business.name);
     if (inbox) {
       emailInboxId = inbox.id;
       emailAddress = inbox.emailAddress;
-      logger.info({ businessId, emailAddress }, "AgentMail inbox created for business");
+      logger.info({ businessId, emailAddress }, "AgentMail inbox inherited/provisioned for site");
     }
   }
 

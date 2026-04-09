@@ -17,6 +17,7 @@ export const outreachEmailsTable = pgTable("outreach_emails", {
   status: text("status").notNull().default("sent"), // draft | sent | delivered | replied | failed
   agentType: text("agent_type"),
   sentAt: timestamp("sent_at"),
+  scheduledFor: timestamp("scheduled_for"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });

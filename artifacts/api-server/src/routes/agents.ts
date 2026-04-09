@@ -5,6 +5,7 @@ import { openai } from "@workspace/integrations-openai-ai-server";
 import { GetAgentRunParams, TriggerOrchestrateParams } from "@workspace/api-zod";
 import { logger } from "../lib/logger";
 import { triggerExecutionCycle } from "../services/task-executor";
+import { ensureInbox } from "../lib/agentmail";
 
 const router = Router();
 
@@ -79,7 +80,7 @@ For each business, provide a detailed JSON analysis. Respond with ONLY a JSON ar
   log += `Found ${businesses.length} business opportunities. Saving to database...\n`;
 
   for (const biz of businesses) {
-    await db.insert(businessesTable).values({
+    const [newBiz] = await db.insert(businessesTable).values({
       name: String(biz.name),
       description: String(biz.description),
       marketSize: String(biz.marketSize),
@@ -93,8 +94,13 @@ For each business, provide a detailed JSON analysis. Respond with ONLY a JSON ar
       marketDemandScore: Number(biz.marketDemandScore),
       agentNotes: String(biz.agentNotes),
       status: "planning",
-    });
+    }).returning();
     log += `Created business: ${biz.name}\n`;
+
+    // Fire-and-forget inbox provisioning
+    ensureInbox(newBiz.id, newBiz.name).catch(err =>
+      logger.error({ err, businessId: newBiz.id }, "Researcher: auto-provision inbox failed")
+    );
   }
 
   await db

@@ -1,6 +1,8 @@
-import { eq, inArray } from "drizzle-orm";
-import { db, tasksTable, taskCommentsTable, businessesTable, businessArtifactsTable, businessSitesTable } from "@workspace/db";
+import { eq, inArray, and } from "drizzle-orm";
+import { db, tasksTable, taskCommentsTable, businessesTable, businessArtifactsTable, businessSitesTable, outreachEmailsTable } from "@workspace/db";
 import { openai } from "@workspace/integrations-openai-ai-server";
+import { listMessages, sendEmail } from "../lib/agentmail";
+import { sendScheduledEmails } from "../routes/email";
 import { logger } from "../lib/logger";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -8,6 +10,8 @@ import { logger } from "../lib/logger";
 const MONITOR_INTERVAL_MS = 30_000;          // Orchestrator checks every 30s
 const TASK_WORK_INTERVAL_MS = 2.5 * 60_000; // Each task gets a new work cycle every 2.5 min
 const STALL_THRESHOLD_MS = 6 * 60_000;      // After 6 min with no update, task is considered stalled
+const INBOX_CHECK_INTERVAL_MS = 5 * 60_000; // Check inboxes every 5 min
+const SCHEDULED_EMAIL_INTERVAL_MS = 60 * 60_000; // Send scheduled emails every hour
 
 // ─── State ────────────────────────────────────────────────────────────────────
 
@@ -21,6 +25,10 @@ const previousStatuses = new Map<number, string>();
 const immediateDispatch = new Set<number>();
 // Whether the orchestrator loop is running
 let orchestratorRunning = false;
+// Timestamp of last inbox check
+let lastInboxCheckAt = 0;
+// Timestamp of last scheduled email send
+let lastScheduledEmailAt = 0;
 
 // ─── Agent names ──────────────────────────────────────────────────────────────
 
@@ -232,6 +240,121 @@ Push forward. If your task involves outreach or customer communication — refer
   return progress;
 }
 
+// ─── Inbox Monitoring ─────────────────────────────────────────────────────────
+
+async function monitorInboxes() {
+  try {
+    const businesses = await db.select().from(businessesTable);
+    const bizWithInbox = businesses.filter(b => b.emailInboxId);
+
+    if (bizWithInbox.length === 0) return;
+
+    logger.info({ count: bizWithInbox.length }, "Inbox monitor: checking inboxes");
+
+    for (const business of bizWithInbox) {
+      try {
+        const messages = await listMessages(business.emailInboxId!);
+
+        for (const msg of messages) {
+          if (!msg.id) continue;
+
+          // Dedup by message_id
+          const [existing] = await db.select().from(outreachEmailsTable)
+            .where(and(
+              eq(outreachEmailsTable.businessId, business.id),
+              eq(outreachEmailsTable.messageId, msg.id),
+            ));
+          if (existing) continue;
+
+          // Save inbound message
+          await db.insert(outreachEmailsTable).values({
+            businessId: business.id,
+            inboxId: business.emailInboxId!,
+            messageId: msg.id,
+            threadId: msg.threadId ?? null,
+            direction: "inbound",
+            fromAddress: msg.from,
+            toAddress: msg.to,
+            subject: msg.subject,
+            body: msg.body,
+            status: "received",
+            agentType: null,
+            sentAt: msg.receivedAt ? new Date(msg.receivedAt) : new Date(),
+          });
+
+          logger.info({ businessId: business.id, messageId: msg.id, from: msg.from }, "Inbox monitor: new inbound message saved");
+
+          // Draft and send an AI reply
+          try {
+            const recentArtifacts = await db.select().from(businessArtifactsTable)
+              .where(eq(businessArtifactsTable.businessId, business.id))
+              .limit(3);
+
+            const artifactSummary = recentArtifacts
+              .map(a => `[${a.artifactType}] ${a.title}: ${a.content.slice(0, 200)}`)
+              .join("\n");
+
+            const replyPrompt = `You are representing "${business.name}" and received the following email. Write a professional, friendly reply.
+
+Business: ${business.name}
+Description: ${business.description}
+
+Inbound email from: ${msg.from}
+Subject: ${msg.subject}
+Body: ${msg.body}
+
+Recent work context:
+${artifactSummary || "None"}
+
+Write a concise, helpful reply (100-150 words). Be professional but warm. Sign off as "${business.name} Team".
+Reply with ONLY the email body text — no subject line, no metadata.`;
+
+            const aiResponse = await openai.chat.completions.create({
+              model: "gpt-5.2",
+              max_completion_tokens: 512,
+              messages: [{ role: "user", content: replyPrompt }],
+            });
+
+            const replyBody = aiResponse.choices[0]?.message?.content?.trim();
+            if (replyBody && msg.threadId) {
+              const replyResult = await sendEmail(
+                business.emailInboxId!,
+                msg.from,
+                `Re: ${msg.subject}`,
+                replyBody,
+              );
+
+              if (replyResult) {
+                await db.insert(outreachEmailsTable).values({
+                  businessId: business.id,
+                  inboxId: business.emailInboxId!,
+                  messageId: replyResult.messageId,
+                  threadId: replyResult.threadId ?? msg.threadId,
+                  direction: "outbound",
+                  toAddress: msg.from,
+                  fromAddress: business.emailAddress ?? null,
+                  subject: `Re: ${msg.subject}`,
+                  body: replyBody,
+                  status: "sent",
+                  agentType: "sales",
+                  sentAt: new Date(),
+                });
+                logger.info({ businessId: business.id, to: msg.from }, "Inbox monitor: AI reply sent");
+              }
+            }
+          } catch (replyErr) {
+            logger.error({ replyErr, businessId: business.id }, "Inbox monitor: AI reply failed");
+          }
+        }
+      } catch (err) {
+        logger.error({ err, businessId: business.id }, "Inbox monitor: error checking inbox");
+      }
+    }
+  } catch (err) {
+    logger.error({ err }, "Inbox monitor: fatal error");
+  }
+}
+
 // ─── Orchestrator Monitor Tick ────────────────────────────────────────────────
 
 async function orchestratorTick() {
@@ -346,6 +469,18 @@ async function orchestratorTick() {
     // Update previousStatuses at end of tick so next tick can detect transitions
     for (const task of allTasks) {
       previousStatuses.set(task.id, task.status);
+    }
+
+    // Inbox monitoring every 5 minutes
+    if (now - lastInboxCheckAt >= INBOX_CHECK_INTERVAL_MS) {
+      lastInboxCheckAt = now;
+      monitorInboxes().catch(err => logger.error({ err }, "Inbox monitoring failed"));
+    }
+
+    // Scheduled email sending every hour
+    if (now - lastScheduledEmailAt >= SCHEDULED_EMAIL_INTERVAL_MS) {
+      lastScheduledEmailAt = now;
+      sendScheduledEmails().catch(err => logger.error({ err }, "Scheduled email send failed"));
     }
   } catch (err) {
     logger.error({ err }, "Orchestrator tick failed");

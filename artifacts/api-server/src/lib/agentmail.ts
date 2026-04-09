@@ -2,6 +2,8 @@
 // Handles inbox creation, email sending, and inbox management
 
 import { ReplitConnectors } from "@replit/connectors-sdk";
+import { eq } from "drizzle-orm";
+import { db, businessesTable, businessSitesTable } from "@workspace/db";
 import { logger } from "./logger";
 
 export interface AgentMailInbox {
@@ -130,5 +132,51 @@ export async function listInboxes(): Promise<AgentMailInbox[]> {
   } catch (err) {
     logger.error({ err }, "AgentMail listInboxes error");
     return [];
+  }
+}
+
+/**
+ * Ensures a business has an AgentMail inbox.
+ * If already provisioned, returns immediately.
+ * Otherwise creates an inbox and saves the IDs to both businesses and business_sites tables.
+ */
+export async function ensureInbox(businessId: number, businessName: string): Promise<AgentMailInbox | null> {
+  try {
+    // Check if already provisioned on the business record
+    const [business] = await db.select().from(businessesTable).where(eq(businessesTable.id, businessId));
+    if (!business) {
+      logger.warn({ businessId }, "ensureInbox: business not found");
+      return null;
+    }
+
+    if (business.emailInboxId) {
+      return { id: business.emailInboxId, emailAddress: business.emailAddress ?? "" };
+    }
+
+    // Create new inbox
+    const inbox = await createInbox(`${businessName} — Bob AI`);
+    if (!inbox) {
+      logger.warn({ businessId }, "ensureInbox: inbox creation failed");
+      return null;
+    }
+
+    // Save to businesses table
+    await db.update(businessesTable)
+      .set({ emailInboxId: inbox.id, emailAddress: inbox.emailAddress, updatedAt: new Date() })
+      .where(eq(businessesTable.id, businessId));
+
+    // Also update business_sites if one exists
+    const [site] = await db.select().from(businessSitesTable).where(eq(businessSitesTable.businessId, businessId));
+    if (site) {
+      await db.update(businessSitesTable)
+        .set({ emailInboxId: inbox.id, emailAddress: inbox.emailAddress, contactEmail: inbox.emailAddress, updatedAt: new Date() })
+        .where(eq(businessSitesTable.businessId, businessId));
+    }
+
+    logger.info({ businessId, emailAddress: inbox.emailAddress }, "ensureInbox: inbox provisioned");
+    return inbox;
+  } catch (err) {
+    logger.error({ err, businessId }, "ensureInbox error");
+    return null;
   }
 }

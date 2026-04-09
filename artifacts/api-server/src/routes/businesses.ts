@@ -8,6 +8,8 @@ import {
   UpdateBusinessParams,
   DeleteBusinessParams,
 } from "@workspace/api-zod";
+import { ensureInbox } from "../lib/agentmail";
+import { logger } from "../lib/logger";
 
 const router = Router();
 
@@ -30,6 +32,11 @@ router.post("/", async (req, res) => {
     .values(parsed.data)
     .returning();
   res.status(201).json(business);
+
+  // Fire-and-forget inbox provisioning
+  ensureInbox(business.id, business.name).catch(err =>
+    logger.error({ err, businessId: business.id }, "Auto-provision inbox failed")
+  );
 });
 
 router.get("/:id", async (req, res) => {
