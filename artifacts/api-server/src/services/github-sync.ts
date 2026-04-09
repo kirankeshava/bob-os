@@ -147,7 +147,7 @@ async function buildGeneratedArtifacts(): Promise<Map<string, Buffer>> {
     if (!biz) continue;
     const bizSlug = slugify(biz.name);
     const titleSlug = slugify(artifact.title);
-    const filePath = `generated/${bizSlug}/${titleSlug}.md`;
+    const filePath = `generated/${bizSlug}/${titleSlug}-${artifact.id}.md`;
 
     const md = [
       `# ${artifact.title}`,
@@ -173,6 +173,7 @@ async function buildGeneratedArtifacts(): Promise<Map<string, Buffer>> {
 
 const lastBlobShas = new Map<string, string>();
 let baselineLoaded = false;
+let isSyncing = false;
 
 async function githubRequest(
   connectors: ReplitConnectors,
@@ -277,6 +278,12 @@ async function runSync() {
     return;
   }
 
+  if (isSyncing) {
+    logger.warn("GitHub sync: previous run still in progress, skipping this cycle");
+    return;
+  }
+
+  isSyncing = true;
   syncStatus.status = "syncing";
   logger.info({ repo }, "GitHub sync: starting run");
 
@@ -414,6 +421,8 @@ async function runSync() {
       lastSyncAt: new Date().toISOString(),
       errorMessage: msg,
     };
+  } finally {
+    isSyncing = false;
   }
 }
 
