@@ -649,8 +649,9 @@ function InboxTab({ businessId, businessName, business }: InboxTabProps) {
   const { toast } = useToast();
 
   const emailAddress = business.emailAddress ?? inboxData?.emailAddress;
-  const messages = inboxData?.logged ?? [];
-  const inboundCount = messages.filter(m => m.direction === "inbound" && m.status === "received").length;
+  const loggedEmails = inboxData?.logged ?? [];
+  const liveMessages: Array<{ id: string; subject: string; from: string; to: string; body: string; threadId?: string; sentAt?: string }> = (inboxData as Record<string, unknown>)?.messages as typeof liveMessages ?? [];
+  const totalCount = liveMessages.length + loggedEmails.length;
 
   const copyEmail = () => {
     if (emailAddress) {
@@ -670,7 +671,7 @@ function InboxTab({ businessId, businessName, business }: InboxTabProps) {
                 <Mail className="h-4 w-4 text-green-400" />
               </div>
               <div>
-                <p className="text-[10px] text-muted-foreground uppercase font-mono">Business Email Inbox</p>
+                <p className="text-[10px] text-muted-foreground uppercase font-mono">Shared Business Inbox</p>
                 {emailAddress ? (
                   <div className="flex items-center gap-2 mt-0.5">
                     <span className="text-sm font-mono text-green-400 font-medium">{emailAddress}</span>
@@ -679,6 +680,9 @@ function InboxTab({ businessId, businessName, business }: InboxTabProps) {
                     </button>
                     <Badge variant="outline" className="text-[9px] font-mono border-green-500/30 text-green-400 bg-green-500/10 px-1.5 py-0">
                       ✓ Active
+                    </Badge>
+                    <Badge variant="outline" className="text-[9px] font-mono border-yellow-500/30 text-yellow-400 bg-yellow-500/10 px-1.5 py-0">
+                      Receive Only
                     </Badge>
                   </div>
                 ) : (
@@ -696,16 +700,7 @@ function InboxTab({ businessId, businessName, business }: InboxTabProps) {
                 onClick={() => { setComposeOnboarding(true); setShowCompose(true); }}
               >
                 <Users className="mr-1 h-3 w-3" />
-                Onboard Contact
-              </Button>
-              <Button
-                size="sm"
-                className="font-mono text-xs h-7 bg-primary hover:bg-primary/90"
-                onClick={() => { setComposeOnboarding(false); setShowCompose(true); }}
-                disabled={!emailAddress}
-              >
-                <Plus className="mr-1 h-3 w-3" />
-                Compose
+                Plan Onboarding
               </Button>
             </div>
           </div>
@@ -716,38 +711,76 @@ function InboxTab({ businessId, businessName, business }: InboxTabProps) {
       <div className="flex items-center gap-3 text-xs font-mono text-muted-foreground">
         <span className="flex items-center gap-1">
           <Inbox className="h-3 w-3" />
-          {messages.length} total messages
+          {totalCount} total messages
         </span>
-        {inboundCount > 0 && (
+        {liveMessages.length > 0 && (
           <span className="flex items-center gap-1 text-blue-400">
             <ArrowDownLeft className="h-3 w-3" />
-            {inboundCount} unread inbound
+            {liveMessages.length} received
           </span>
         )}
       </div>
 
-      {/* Message list */}
+      {/* Live received messages from AgentMail */}
+      {liveMessages.length > 0 && (
+        <div>
+          <p className="text-[10px] font-mono text-muted-foreground uppercase mb-1.5 flex items-center gap-1">
+            <ArrowDownLeft className="h-3 w-3 text-blue-400" />
+            Received Messages
+          </p>
+          {liveMessages.map(msg => (
+            <div
+              key={msg.id}
+              className="border border-blue-500/20 bg-blue-500/5 rounded-md mb-1.5 p-2.5"
+            >
+              <div className="flex items-center gap-2">
+                <ArrowDownLeft className="h-3 w-3 text-blue-400 shrink-0" />
+                <span className="text-[10px] font-mono uppercase font-bold text-blue-400 shrink-0">IN</span>
+                <span className="text-xs font-mono text-muted-foreground truncate flex-1">{msg.from}</span>
+                <Badge variant="outline" className="text-[9px] font-mono px-1 py-0 border-blue-500/30 text-blue-400">received</Badge>
+                {msg.sentAt && (
+                  <span className="text-[9px] text-muted-foreground/60 font-mono shrink-0">
+                    {timeAgo(msg.sentAt)}
+                  </span>
+                )}
+              </div>
+              {msg.subject && (
+                <p className="text-xs font-medium mt-1 ml-5 text-foreground/80 truncate">{msg.subject}</p>
+              )}
+              {msg.body && (
+                <p className="text-[10px] text-muted-foreground/60 mt-1 ml-5 line-clamp-2 font-mono">{msg.body}</p>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Outreach log from DB */}
       {isLoading ? (
         <div className="space-y-1.5">
           {[1, 2, 3].map(i => <div key={i} className="h-12 bg-muted/20 rounded animate-pulse" />)}
         </div>
-      ) : messages.length === 0 ? (
+      ) : loggedEmails.length === 0 && liveMessages.length === 0 ? (
         <Card className="border-dashed border-border/40 bg-card/10">
           <CardContent className="p-8 text-center">
             <Inbox className="h-10 w-10 text-muted-foreground/20 mx-auto mb-3" />
             <p className="text-sm font-medium text-muted-foreground">No messages yet</p>
             <p className="text-xs text-muted-foreground/60 mt-1">
-              Use Compose to send your first email, or Start Onboarding to welcome a new contact
+              Customers can email <span className="text-green-400 font-mono">{emailAddress}</span> to contact this business
             </p>
           </CardContent>
         </Card>
-      ) : (
+      ) : loggedEmails.length > 0 ? (
         <div>
-          {messages.map(email => (
+          <p className="text-[10px] font-mono text-muted-foreground uppercase mb-1.5 flex items-center gap-1">
+            <ArrowUpRight className="h-3 w-3 text-green-400" />
+            Outreach Log
+          </p>
+          {loggedEmails.map(email => (
             <EmailRow key={email.id} email={email} />
           ))}
         </div>
-      )}
+      ) : null}
 
       {showCompose && (
         <ComposeModal
