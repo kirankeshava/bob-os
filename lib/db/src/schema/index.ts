@@ -8,3 +8,4 @@ export * from "./outreach-emails";
 export * from "./signups";
 export * from "./skills";
 export * from "./customers";
+export * from "./ceo-reviews";
