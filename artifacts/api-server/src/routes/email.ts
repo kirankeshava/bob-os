@@ -133,7 +133,26 @@ Respond with ONLY valid JSON array:
   }
 ]`;
 
-  let emails: { subject: string; body: string; delayDays: number }[] = [];
+  const FIXED_DELAYS = [0, 2, 5];
+  const fallbackEmails = [
+    {
+      subject: `Welcome to ${business.name}!`,
+      body: `Hi ${contactName || "there"},\n\nWelcome! We're thrilled to have you connected with ${business.name}.\n\n${business.description}\n\nWe look forward to working with you.\n\nBest regards,\n${business.name} Team`,
+      delayDays: 0,
+    },
+    {
+      subject: `How ${business.name} can help you`,
+      body: `Hi ${contactName || "there"},\n\nWe wanted to follow up and share more about what we do at ${business.name}.\n\n${business.description}\n\nWe'd love to discuss how we can help you achieve your goals.\n\nBest regards,\n${business.name} Team`,
+      delayDays: 2,
+    },
+    {
+      subject: `Ready to get started with ${business.name}?`,
+      body: `Hi ${contactName || "there"},\n\nWe hope you've had a chance to learn more about ${business.name}.\n\nWe'd love to schedule a quick call to discuss your needs and how we can help. Just reply to this email and we'll find a time that works.\n\nLooking forward to connecting,\n${business.name} Team`,
+      delayDays: 5,
+    },
+  ];
+
+  let rawEmails: { subject?: string; body?: string; delayDays?: number }[] = [];
   try {
     const response = await openai.chat.completions.create({
       model: "gpt-5.2",
@@ -142,12 +161,23 @@ Respond with ONLY valid JSON array:
     });
     const raw = response.choices[0]?.message?.content ?? "[]";
     const jsonMatch = raw.match(/\[[\s\S]*\]/);
-    emails = jsonMatch ? JSON.parse(jsonMatch[0]) : [];
+    rawEmails = jsonMatch ? JSON.parse(jsonMatch[0]) : [];
   } catch (err) {
-    logger.error({ err }, "Failed to generate onboarding sequence");
-    res.status(500).json({ error: "AI generation failed" });
-    return;
+    logger.error({ err }, "Failed to generate onboarding sequence, using fallback");
+    rawEmails = [];
   }
+
+  // Enforce exactly 3 emails with fixed delays regardless of AI output
+  const emails = FIXED_DELAYS.map((delayDays, i) => {
+    const aiEmail = rawEmails[i];
+    const subject = typeof aiEmail?.subject === "string" && aiEmail.subject.trim()
+      ? aiEmail.subject.trim()
+      : fallbackEmails[i].subject;
+    const body = typeof aiEmail?.body === "string" && aiEmail.body.trim()
+      ? aiEmail.body.trim()
+      : fallbackEmails[i].body;
+    return { subject, body, delayDays };
+  });
 
   const now = new Date();
   const inserted = [];

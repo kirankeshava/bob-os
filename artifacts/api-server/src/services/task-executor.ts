@@ -316,7 +316,7 @@ Reply with ONLY the email body text — no subject line, no metadata.`;
             });
 
             const replyBody = aiResponse.choices[0]?.message?.content?.trim();
-            if (replyBody && msg.threadId) {
+            if (replyBody) {
               const replyResult = await sendEmail(
                 business.emailInboxId!,
                 msg.from,

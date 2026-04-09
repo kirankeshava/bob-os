@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useMemo } from "react";
 import { useRoute, Link } from "wouter";
 import { useLocation } from "wouter";
 import {
@@ -10,6 +10,7 @@ import {
   useGenerateBusinessSite,
   useUpdateTask,
   useCreateTaskComment,
+  useListTaskComments, getListTaskCommentsQueryKey,
   useTriggerOrchestrate,
   useSendBusinessEmail,
   useOnboardContact,
@@ -34,6 +35,22 @@ import { useToast } from "@/hooks/use-toast";
 import { useQueryClient } from "@tanstack/react-query";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function parseOptions(content: string): string[] {
+  const lines = content.split('\n');
+  const options: string[] = [];
+  for (const line of lines) {
+    const match = line.match(/^(\d+[\.\)]\s+|[-*]\s+)(.+)$/);
+    if (match) options.push(match[2].trim());
+  }
+  return options.length >= 2 ? options : [];
+}
+
+function parseCostImpact(content: string): string {
+  const regex = /\*\*Cost Impact\*\*[:\s]*([^\n]+)/i;
+  const match = content.match(regex);
+  return match ? match[1].trim() : "";
+}
 
 function timeAgo(date: string | null | undefined): string {
   if (!date) return "never";
@@ -150,21 +167,55 @@ interface ApprovalCardProps {
 function ApprovalCard({ task, onApprove, onReview, isApproving }: ApprovalCardProps) {
   const [showInput, setShowInput] = useState(false);
   const [instruction, setInstruction] = useState("");
+  const [selectedOption, setSelectedOption] = useState(0);
   const textRef = useRef<HTMLTextAreaElement>(null);
   const approvalType = detectApprovalType(task);
   const style = APPROVAL_STYLES[approvalType];
   const Icon = style.icon;
 
+  const { data: comments } = useListTaskComments(task.id, {
+    query: { queryKey: getListTaskCommentsQueryKey(task.id), refetchInterval: 10000 }
+  });
+
+  const latestAgentComment = React.useMemo(() => {
+    if (!comments?.length) return null;
+    const sorted = [...comments].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    return sorted.find(c => c.author === 'orchestrator' || c.author === 'agent') ?? null;
+  }, [comments]);
+
+  const options = React.useMemo(() =>
+    latestAgentComment ? parseOptions(latestAgentComment.content) : [],
+    [latestAgentComment]
+  );
+
+  const costImpact = React.useMemo(() =>
+    latestAgentComment ? parseCostImpact(latestAgentComment.content) : "",
+    [latestAgentComment]
+  );
+
   useEffect(() => { if (showInput) textRef.current?.focus(); }, [showInput]);
 
-  const handleApprove = () => onApprove(task.id, instruction.trim() || undefined);
+  useEffect(() => {
+    if (selectedOption >= options.length && options.length > 0) {
+      setSelectedOption(0);
+    }
+  }, [options, selectedOption]);
+
+  const handleApprove = () => {
+    let finalInstruction = instruction.trim();
+    if (options.length >= 2) {
+      const optionText = `Option selected: ${options[selectedOption]}`;
+      finalInstruction = finalInstruction ? `${optionText}\n\n${finalInstruction}` : optionText;
+    }
+    onApprove(task.id, finalInstruction || undefined);
+  };
 
   return (
     <Card className={`${style.card} transition-all`} data-testid={`approval-task-${task.id}`}>
       <div className="p-3">
         {/* Header row */}
         <div className="flex items-start justify-between gap-3">
-          <div className="flex items-center gap-2 flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-1 min-w-0 flex-wrap">
             {/* Pulsing indicator */}
             <span className="relative flex h-3 w-3 shrink-0">
               <span className={`animate-ping absolute inline-flex h-full w-full rounded-full ${style.pulseColor} opacity-60`} />
@@ -175,6 +226,11 @@ function ApprovalCard({ task, onApprove, onReview, isApproving }: ApprovalCardPr
             </Badge>
             <AgentBadge type={task.agentType} />
             <span className="text-xs font-mono text-muted-foreground">T-{task.id}</span>
+            {costImpact && (
+              <span className="inline-flex items-center gap-1 text-[9px] font-mono px-1.5 py-0.5 rounded border bg-emerald-500/10 text-emerald-300 border-emerald-500/30 shrink-0">
+                <DollarSign className="h-2.5 w-2.5" />{costImpact}
+              </span>
+            )}
           </div>
           <div className="flex gap-1.5 shrink-0">
             <Button
@@ -204,10 +260,46 @@ function ApprovalCard({ task, onApprove, onReview, isApproving }: ApprovalCardPr
           </div>
         )}
 
+        {/* Options radio group */}
+        {options.length >= 2 && (
+          <div className="mb-2.5 space-y-1.5">
+            <p className="text-[10px] text-muted-foreground font-mono uppercase">Choose an option:</p>
+            <div className="space-y-1">
+              {options.map((opt, i) => (
+                <label
+                  key={i}
+                  className={`flex items-start gap-2 rounded border px-2.5 py-1.5 cursor-pointer transition-colors text-xs font-mono ${
+                    selectedOption === i
+                      ? "border-primary/50 bg-primary/10 text-foreground"
+                      : "border-border/30 bg-muted/10 text-muted-foreground hover:border-border/60"
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name={`approval-option-${task.id}`}
+                    value={i}
+                    checked={selectedOption === i}
+                    onChange={() => setSelectedOption(i)}
+                    className="mt-0.5 accent-primary shrink-0"
+                  />
+                  <span className="flex-1 leading-snug">{opt}</span>
+                  {i === 0 && (
+                    <span className="shrink-0 text-[8px] font-mono uppercase px-1 py-0.5 rounded bg-primary/20 text-primary border border-primary/30 leading-none self-center">
+                      AI pick
+                    </span>
+                  )}
+                </label>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Instruction input (expandable) */}
         {showInput && (
           <div className="mb-2.5 space-y-1.5">
-            <p className="text-[10px] text-muted-foreground font-mono uppercase">Your instructions to the agent:</p>
+            <p className="text-[10px] text-muted-foreground font-mono uppercase">
+              {options.length >= 2 ? "Override / additional instructions:" : "Your instructions to the agent:"}
+            </p>
             <Textarea
               ref={textRef}
               value={instruction}
@@ -242,7 +334,7 @@ function ApprovalCard({ task, onApprove, onReview, isApproving }: ApprovalCardPr
             data-testid={`approve-task-${task.id}`}
           >
             {isApproving ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <ThumbsUp className="mr-1 h-3 w-3" />}
-            {instruction.trim() ? "Approve + Send Instructions" : "Approve"}
+            {(options.length >= 2 || instruction.trim()) ? "Approve + Send Instructions" : "Approve"}
           </Button>
           <Button
             size="sm"
@@ -497,7 +589,7 @@ function EmailRow({ email }: { email: OutreachEmail }) {
 
   return (
     <div
-      className={`border rounded-md mb-1.5 cursor-pointer transition-colors ${
+      className={`border rounded-md mb-1 cursor-pointer transition-colors ${
         isInbound
           ? "border-blue-500/20 bg-blue-500/5 hover:border-blue-500/40"
           : "border-border/30 bg-card/30 hover:border-border/60"
@@ -542,6 +634,57 @@ function EmailRow({ email }: { email: OutreachEmail }) {
   );
 }
 
+interface EmailThreadProps {
+  threadId: string;
+  emails: OutreachEmail[];
+}
+
+function EmailThread({ threadId, emails }: EmailThreadProps) {
+  const [expanded, setExpanded] = useState(false);
+  const latest = emails[0];
+  const hasInbound = emails.some(e => e.direction === "inbound");
+  const isUnthreaded = threadId === "__no_thread__";
+
+  if (isUnthreaded) {
+    return <>{emails.map(email => <EmailRow key={email.id} email={email} />)}</>;
+  }
+
+  return (
+    <div className={`border rounded-md mb-1.5 transition-colors ${
+      hasInbound ? "border-blue-500/20 bg-blue-500/5" : "border-border/30 bg-card/30"
+    }`}>
+      <div
+        className="p-2.5 cursor-pointer hover:bg-muted/10 transition-colors"
+        onClick={() => setExpanded(e => !e)}
+      >
+        <div className="flex items-center gap-2">
+          <span className="text-[9px] font-mono text-muted-foreground/50 uppercase shrink-0">Thread</span>
+          <span className="text-xs font-mono text-muted-foreground truncate flex-1">
+            {latest?.subject || "(no subject)"}
+          </span>
+          <Badge variant="outline" className="text-[9px] font-mono px-1 py-0 border-border/40 text-muted-foreground shrink-0">
+            {emails.length} msg{emails.length !== 1 ? "s" : ""}
+          </Badge>
+          {hasInbound && (
+            <Badge variant="outline" className="text-[9px] font-mono px-1 py-0 border-blue-500/30 text-blue-400 shrink-0">
+              reply
+            </Badge>
+          )}
+          <span className="text-[9px] text-muted-foreground/60 font-mono shrink-0">
+            {timeAgo(latest?.sentAt || latest?.scheduledFor || latest?.createdAt)}
+          </span>
+          <ChevronDown className={`h-3 w-3 text-muted-foreground/50 shrink-0 transition-transform ${expanded ? "rotate-180" : ""}`} />
+        </div>
+      </div>
+      {expanded && (
+        <div className="px-2.5 pb-2.5 space-y-1 border-t border-border/20 pt-2">
+          {emails.map(email => <EmailRow key={email.id} email={email} />)}
+        </div>
+      )}
+    </div>
+  );
+}
+
 interface InboxTabProps {
   businessId: number;
   businessName: string;
@@ -559,6 +702,30 @@ function InboxTab({ businessId, businessName, business }: InboxTabProps) {
   const emailAddress = business.emailAddress ?? inboxData?.emailAddress;
   const messages = inboxData?.logged ?? [];
   const inboundCount = messages.filter(m => m.direction === "inbound" && m.status === "received").length;
+
+  // Group messages by threadId; messages without a threadId go into a catch-all group
+  const threadMap = useMemo(() => {
+    const map = new Map<string, OutreachEmail[]>();
+    for (const msg of messages) {
+      const key = (msg as OutreachEmail & { threadId?: string | null }).threadId || "__no_thread__";
+      const list = map.get(key) ?? [];
+      list.push(msg);
+      map.set(key, list);
+    }
+    // Sort each thread newest-first; sort threads by latest message
+    for (const [k, v] of map) {
+      map.set(k, v.sort((a, b) => {
+        const ta = new Date(a.sentAt || a.scheduledFor || a.createdAt).getTime();
+        const tb = new Date(b.sentAt || b.scheduledFor || b.createdAt).getTime();
+        return tb - ta;
+      }));
+    }
+    return [...map.entries()].sort(([, a], [, b]) => {
+      const ta = new Date(a[0].sentAt || a[0].scheduledFor || a[0].createdAt).getTime();
+      const tb = new Date(b[0].sentAt || b[0].scheduledFor || b[0].createdAt).getTime();
+      return tb - ta;
+    });
+  }, [messages]);
 
   const copyEmail = () => {
     if (emailAddress) {
@@ -651,8 +818,8 @@ function InboxTab({ businessId, businessName, business }: InboxTabProps) {
         </Card>
       ) : (
         <div>
-          {messages.map(email => (
-            <EmailRow key={email.id} email={email} />
+          {threadMap.map(([threadId, threadEmails]) => (
+            <EmailThread key={threadId} threadId={threadId} emails={threadEmails} />
           ))}
         </div>
       )}
