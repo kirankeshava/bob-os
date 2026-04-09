@@ -5,9 +5,6 @@ import { z } from "zod/v4";
 export const subscriptionStatusEnum = ["trial", "active", "trial_expired", "cancelled"] as const;
 export type SubscriptionStatus = typeof subscriptionStatusEnum[number];
 
-export const paymentMethodEnum = ["stripe", "paypal", "zelle"] as const;
-export type PaymentMethod = typeof paymentMethodEnum[number];
-
 export const customersTable = pgTable("customers", {
   id: serial("id").primaryKey(),
   name: text("name").notNull(),
@@ -17,8 +14,6 @@ export const customersTable = pgTable("customers", {
   googleUrl: text("google_url"),
   yelpUrl: text("yelp_url"),
   stripeCustomerId: text("stripe_customer_id"),
-  paymentMethod: text("payment_method").notNull().default("stripe"),
-  paypalSubscriptionId: text("paypal_subscription_id"),
   subscriptionStatus: text("subscription_status").notNull().default("trial"),
   trialStartAt: timestamp("trial_start_at").notNull().defaultNow(),
   trialEndAt: timestamp("trial_end_at").notNull(),

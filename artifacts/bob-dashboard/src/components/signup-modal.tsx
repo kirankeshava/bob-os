@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { X, Check, Loader2, ArrowRight, CreditCard, DollarSign, Copy, ArrowLeft } from "lucide-react";
+import { X, Check, Loader2, ArrowRight } from "lucide-react";
 
 interface SignupModalProps {
   isOpen: boolean;
@@ -18,9 +18,6 @@ interface FormState {
   yelpListingUrl: string;
 }
 
-type PaymentMethodType = "stripe" | "paypal" | "zelle";
-type ModalStep = "details" | "payment" | "submitted" | "zelle-info";
-
 const initialForm: FormState = {
   fullName: "",
   email: "",
@@ -32,16 +29,14 @@ const initialForm: FormState = {
 
 export function SignupModal({ isOpen, onClose, planName, businessId, accentColor = "#6366f1" }: SignupModalProps) {
   const [form, setForm] = useState<FormState>(initialForm);
-  const [step, setStep] = useState<ModalStep>("details");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [zelleInfo, setZelleInfo] = useState<{ email: string; phone: string } | null>(null);
-  const [copiedField, setCopiedField] = useState<string | null>(null);
 
   if (!isOpen) return null;
 
   const handleOverlayClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (e.target === e.currentTarget) handleClose();
+    if (e.target === e.currentTarget) onClose();
   };
 
   const togglePlatform = (platform: string) => {
@@ -56,15 +51,13 @@ export function SignupModal({ isOpen, onClose, planName, businessId, accentColor
   const handleClose = () => {
     if (!isSubmitting) {
       setForm(initialForm);
-      setStep("details");
+      setSubmitted(false);
       setError(null);
-      setZelleInfo(null);
-      setCopiedField(null);
       onClose();
     }
   };
 
-  const handleDetailsSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
 
@@ -72,26 +65,23 @@ export function SignupModal({ isOpen, onClose, planName, businessId, accentColor
       setError("Please fill in all required fields.");
       return;
     }
+
     if (form.platforms.length === 0) {
       setError("Please select at least one platform to monitor.");
       return;
     }
+
     if (form.platforms.includes("Google") && !form.googleListingUrl.trim()) {
       setError("Please enter your Google Business listing URL.");
       return;
     }
+
     if (form.platforms.includes("Yelp") && !form.yelpListingUrl.trim()) {
       setError("Please enter your Yelp business listing URL.");
       return;
     }
 
-    setStep("payment");
-  };
-
-  const handlePaymentSelect = async (method: PaymentMethodType) => {
-    setError(null);
     setIsSubmitting(true);
-
     try {
       if (businessId == null) {
         setError("Unable to submit — business context is missing. Please refresh and try again.");
@@ -110,7 +100,6 @@ export function SignupModal({ isOpen, onClose, planName, businessId, accentColor
           googleListingUrl: form.googleListingUrl.trim() || undefined,
           yelpListingUrl: form.yelpListingUrl.trim() || undefined,
           planName: planName ?? undefined,
-          paymentMethod: method,
         }),
       });
 
@@ -119,34 +108,12 @@ export function SignupModal({ isOpen, onClose, planName, businessId, accentColor
         throw new Error(data.error ?? "Something went wrong. Please try again.");
       }
 
-      if (method === "zelle") {
-        try {
-          const zelleRes = await fetch(`${import.meta.env.BASE_URL}api/customers/zelle/contact-info`);
-          if (zelleRes.ok) {
-            const info = await zelleRes.json();
-            setZelleInfo(info);
-          }
-        } catch {
-          setZelleInfo({ email: "payments@example.com", phone: "(555) 123-4567" });
-        }
-        setStep("zelle-info");
-      } else if (method === "paypal") {
-        setStep("submitted");
-      } else {
-        setStep("submitted");
-      }
+      setSubmitted(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong. Please try again.");
     } finally {
       setIsSubmitting(false);
     }
-  };
-
-  const copyToClipboard = (text: string, field: string) => {
-    navigator.clipboard.writeText(text).then(() => {
-      setCopiedField(field);
-      setTimeout(() => setCopiedField(null), 2000);
-    });
   };
 
   return (
@@ -165,7 +132,7 @@ export function SignupModal({ isOpen, onClose, planName, businessId, accentColor
         </button>
 
         <div className="p-8">
-          {step === "submitted" && (
+          {submitted ? (
             <div className="text-center py-6">
               <div
                 className="w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-6"
@@ -188,138 +155,7 @@ export function SignupModal({ isOpen, onClose, planName, businessId, accentColor
                 Close
               </button>
             </div>
-          )}
-
-          {step === "zelle-info" && (
-            <div className="py-4">
-              <div
-                className="w-14 h-14 rounded-full flex items-center justify-center mx-auto mb-5"
-                style={{ backgroundColor: `rgba(${hexToRgbString(accentColor)}, 0.1)` }}
-              >
-                <DollarSign className="h-7 w-7" style={{ color: accentColor }} />
-              </div>
-              <h2 className="text-xl font-black text-gray-900 mb-2 text-center">Pay with Zelle</h2>
-              <p className="text-gray-500 text-sm text-center mb-6">
-                Send your weekly payment of <strong>$97</strong> to the following Zelle account.
-                Include your business name in the memo.
-              </p>
-
-              {zelleInfo && (
-                <div className="space-y-3 mb-6">
-                  <div className="flex items-center justify-between bg-gray-50 rounded-lg px-4 py-3 border border-gray-200">
-                    <div>
-                      <p className="text-[10px] uppercase font-semibold text-gray-400 tracking-wide">Zelle Email</p>
-                      <p className="text-sm font-mono font-semibold text-gray-900">{zelleInfo.email}</p>
-                    </div>
-                    <button
-                      onClick={() => copyToClipboard(zelleInfo.email, "email")}
-                      className="text-gray-400 hover:text-gray-600 transition-colors p-1"
-                      title="Copy email"
-                    >
-                      {copiedField === "email" ? <Check className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
-                    </button>
-                  </div>
-                  <div className="flex items-center justify-between bg-gray-50 rounded-lg px-4 py-3 border border-gray-200">
-                    <div>
-                      <p className="text-[10px] uppercase font-semibold text-gray-400 tracking-wide">Zelle Phone</p>
-                      <p className="text-sm font-mono font-semibold text-gray-900">{zelleInfo.phone}</p>
-                    </div>
-                    <button
-                      onClick={() => copyToClipboard(zelleInfo.phone, "phone")}
-                      className="text-gray-400 hover:text-gray-600 transition-colors p-1"
-                      title="Copy phone"
-                    >
-                      {copiedField === "phone" ? <Check className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              <div className="bg-blue-50 border border-blue-200 rounded-lg px-4 py-3 mb-6">
-                <p className="text-xs text-blue-700">
-                  After sending, we'll verify your payment and activate your account. You'll receive a confirmation email at <strong>{form.email}</strong>.
-                </p>
-              </div>
-
-              <button
-                onClick={handleClose}
-                className="w-full px-6 py-3 rounded-xl font-semibold text-white transition-opacity hover:opacity-90"
-                style={{ backgroundColor: accentColor }}
-              >
-                Done
-              </button>
-            </div>
-          )}
-
-          {step === "payment" && (
-            <div className="py-2">
-              <button
-                onClick={() => { setStep("details"); setError(null); }}
-                className="flex items-center gap-1 text-sm text-gray-400 hover:text-gray-600 transition-colors mb-4"
-              >
-                <ArrowLeft className="h-3.5 w-3.5" /> Back
-              </button>
-              <h2 className="text-xl font-black text-gray-900 mb-1">Choose Payment Method</h2>
-              <p className="text-gray-500 text-sm mb-6">
-                Select how you'd like to pay after your 7-day free trial ends.
-              </p>
-
-              {error && (
-                <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3 text-red-700 text-sm mb-4">
-                  {error}
-                </div>
-              )}
-
-              <div className="space-y-3">
-                <button
-                  disabled={isSubmitting}
-                  onClick={() => handlePaymentSelect("stripe")}
-                  className="w-full flex items-start gap-4 p-4 rounded-xl border-2 border-gray-200 hover:border-indigo-400 transition-all text-left group disabled:opacity-60"
-                >
-                  <div className="w-10 h-10 rounded-lg bg-indigo-100 flex items-center justify-center shrink-0 group-hover:bg-indigo-200 transition-colors">
-                    <CreditCard className="h-5 w-5 text-indigo-600" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="font-semibold text-gray-900 text-sm">Credit / Debit Card</p>
-                    <p className="text-xs text-gray-500 mt-0.5">Secure payment via Stripe. Auto-renews weekly.</p>
-                  </div>
-                  {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin text-gray-400 mt-1" /> : <ArrowRight className="h-4 w-4 text-gray-300 group-hover:text-indigo-500 transition-colors mt-1" />}
-                </button>
-
-                <button
-                  disabled={isSubmitting}
-                  onClick={() => handlePaymentSelect("paypal")}
-                  className="w-full flex items-start gap-4 p-4 rounded-xl border-2 border-gray-200 hover:border-blue-400 transition-all text-left group disabled:opacity-60"
-                >
-                  <div className="w-10 h-10 rounded-lg bg-blue-100 flex items-center justify-center shrink-0 group-hover:bg-blue-200 transition-colors">
-                    <span className="text-blue-600 font-bold text-sm">PP</span>
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="font-semibold text-gray-900 text-sm">PayPal</p>
-                    <p className="text-xs text-gray-500 mt-0.5">Pay with your PayPal account. Weekly subscription.</p>
-                  </div>
-                  {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin text-gray-400 mt-1" /> : <ArrowRight className="h-4 w-4 text-gray-300 group-hover:text-blue-500 transition-colors mt-1" />}
-                </button>
-
-                <button
-                  disabled={isSubmitting}
-                  onClick={() => handlePaymentSelect("zelle")}
-                  className="w-full flex items-start gap-4 p-4 rounded-xl border-2 border-gray-200 hover:border-green-400 transition-all text-left group disabled:opacity-60"
-                >
-                  <div className="w-10 h-10 rounded-lg bg-green-100 flex items-center justify-center shrink-0 group-hover:bg-green-200 transition-colors">
-                    <DollarSign className="h-5 w-5 text-green-600" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="font-semibold text-gray-900 text-sm">Zelle</p>
-                    <p className="text-xs text-gray-500 mt-0.5">Send weekly payments manually via Zelle.</p>
-                  </div>
-                  {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin text-gray-400 mt-1" /> : <ArrowRight className="h-4 w-4 text-gray-300 group-hover:text-green-500 transition-colors mt-1" />}
-                </button>
-              </div>
-            </div>
-          )}
-
-          {step === "details" && (
+          ) : (
             <>
               <div className="mb-6">
                 <h2 className="text-2xl font-black text-gray-900 mb-1">Get Started{planName ? ` — ${planName}` : ""}</h2>
@@ -328,7 +164,7 @@ export function SignupModal({ isOpen, onClose, planName, businessId, accentColor
                 </p>
               </div>
 
-              <form onSubmit={handleDetailsSubmit} className="space-y-4">
+              <form onSubmit={handleSubmit} className="space-y-4">
                 <div>
                   <label className="block text-sm font-semibold text-gray-700 mb-1">Full Name <span className="text-red-500">*</span></label>
                   <input
@@ -425,10 +261,15 @@ export function SignupModal({ isOpen, onClose, planName, businessId, accentColor
 
                 <button
                   type="submit"
-                  className="w-full py-3.5 rounded-xl font-bold text-white flex items-center justify-center gap-2 transition-opacity hover:opacity-90 mt-2"
+                  disabled={isSubmitting}
+                  className="w-full py-3.5 rounded-xl font-bold text-white flex items-center justify-center gap-2 transition-opacity hover:opacity-90 disabled:opacity-60 mt-2"
                   style={{ backgroundColor: accentColor }}
                 >
-                  Continue <ArrowRight className="h-4 w-4" />
+                  {isSubmitting ? (
+                    <><Loader2 className="h-4 w-4 animate-spin" /> Submitting...</>
+                  ) : (
+                    <>Get Started <ArrowRight className="h-4 w-4" /></>
+                  )}
                 </button>
               </form>
             </>

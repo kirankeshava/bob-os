@@ -3,7 +3,6 @@ import { eq, desc } from "drizzle-orm";
 import { db, customersTable } from "@workspace/db";
 import { getUncachableStripeClient } from "../lib/stripeClient";
 import { sendEmail, listInboxes } from "../lib/agentmail";
-import { isPayPalConfigured, ensureProductAndPlan, createSubscription, getZelleContactInfo } from "../lib/paypalClient";
 import { logger } from "../lib/logger";
 
 interface CreateCustomerBody {
@@ -14,7 +13,6 @@ interface CreateCustomerBody {
   googleUrl?: string;
   yelpUrl?: string;
   plan?: string;
-  paymentMethod?: string;
 }
 
 function validateCreateCustomer(body: CreateCustomerBody): string | null {
@@ -22,9 +20,6 @@ function validateCreateCustomer(body: CreateCustomerBody): string | null {
   if (!body.email?.trim() || !body.email.includes("@")) return "valid email is required";
   if (!body.businessName?.trim()) return "businessName is required";
   if (!Array.isArray(body.platforms) || body.platforms.length === 0) return "at least one platform is required";
-  if (body.paymentMethod && !["stripe", "paypal", "zelle"].includes(body.paymentMethod)) {
-    return "paymentMethod must be stripe, paypal, or zelle";
-  }
   return null;
 }
 
@@ -79,25 +74,22 @@ router.post("/", async (req, res) => {
   }
 
   const { name, email, businessName, platforms, googleUrl, yelpUrl } = body as Required<Pick<CreateCustomerBody, "name" | "email" | "businessName" | "platforms">> & CreateCustomerBody;
-  const paymentMethod = body.paymentMethod || "stripe";
 
   const trialStartAt = new Date();
   const trialEndAt = new Date(trialStartAt.getTime() + 7 * 24 * 60 * 60 * 1000);
 
   let stripeCustomerId: string | null = null;
-  if (paymentMethod === "stripe") {
-    try {
-      const stripe = await getUncachableStripeClient();
-      const stripeCustomer = await stripe.customers.create({
-        name,
-        email,
-        metadata: { businessName, platforms: platforms.join(",") },
-      });
-      stripeCustomerId = stripeCustomer.id;
-      logger.info({ stripeCustomerId, email }, "Stripe customer created");
-    } catch (err) {
-      logger.error({ err, email }, "Failed to create Stripe customer — continuing without Stripe ID");
-    }
+  try {
+    const stripe = await getUncachableStripeClient();
+    const stripeCustomer = await stripe.customers.create({
+      name,
+      email,
+      metadata: { businessName, platforms: platforms.join(",") },
+    });
+    stripeCustomerId = stripeCustomer.id;
+    logger.info({ stripeCustomerId, email }, "Stripe customer created");
+  } catch (err) {
+    logger.error({ err, email }, "Failed to create Stripe customer — continuing without Stripe ID");
   }
 
   const [customer] = await db
@@ -110,7 +102,6 @@ router.post("/", async (req, res) => {
       googleUrl: googleUrl || null,
       yelpUrl: yelpUrl || null,
       stripeCustomerId,
-      paymentMethod,
       subscriptionStatus: "trial",
       trialStartAt,
       trialEndAt,
@@ -121,7 +112,7 @@ router.post("/", async (req, res) => {
     logger.error({ err, email }, "Welcome email failed")
   );
 
-  logger.info({ customerId: customer.id, email, businessName, paymentMethod }, "New customer created");
+  logger.info({ customerId: customer.id, email, businessName }, "New customer created");
   res.status(201).json(customer);
 });
 
@@ -131,11 +122,6 @@ router.get("/", async (_req, res) => {
     .from(customersTable)
     .orderBy(desc(customersTable.createdAt));
   res.json(customers);
-});
-
-router.get("/zelle/contact-info", async (_req, res) => {
-  const info = getZelleContactInfo();
-  res.json(info);
 });
 
 router.get("/:id", async (req, res) => {
@@ -210,89 +196,6 @@ router.post("/:id/billing-portal", async (req, res) => {
     logger.error({ err, customerId: id }, "Failed to create billing portal session");
     res.status(500).json({ error: "Failed to create billing portal session" });
   }
-});
-
-router.post("/:id/paypal-checkout", async (req, res) => {
-  const id = parseInt(req.params.id);
-  if (isNaN(id)) {
-    res.status(400).json({ error: "Invalid id" });
-    return;
-  }
-
-  if (!isPayPalConfigured()) {
-    res.status(503).json({ error: "PayPal is not configured" });
-    return;
-  }
-
-  const [customer] = await db
-    .select()
-    .from(customersTable)
-    .where(eq(customersTable.id, id));
-
-  if (!customer) {
-    res.status(404).json({ error: "Customer not found" });
-    return;
-  }
-
-  try {
-    const { planId } = await ensureProductAndPlan();
-    const domain = process.env.REPLIT_DEV_DOMAIN
-      ? `https://${process.env.REPLIT_DEV_DOMAIN}`
-      : "https://localhost";
-
-    const { subscriptionId, approvalUrl } = await createSubscription(
-      planId,
-      customer.name,
-      customer.email,
-      `${domain}/?paypal=success&customerId=${customer.id}`,
-      `${domain}/?paypal=cancelled&customerId=${customer.id}`,
-    );
-
-    await db
-      .update(customersTable)
-      .set({ paypalSubscriptionId: subscriptionId, paymentMethod: "paypal", updatedAt: new Date() })
-      .where(eq(customersTable.id, id));
-
-    logger.info({ customerId: id, subscriptionId }, "PayPal subscription created for customer");
-    res.json({ approvalUrl, subscriptionId });
-  } catch (err) {
-    logger.error({ err, customerId: id }, "Failed to create PayPal checkout");
-    res.status(500).json({ error: "Failed to create PayPal checkout session" });
-  }
-});
-
-router.post("/:id/mark-paid", async (req, res) => {
-  const id = parseInt(req.params.id);
-  if (isNaN(id)) {
-    res.status(400).json({ error: "Invalid id" });
-    return;
-  }
-
-  const [customer] = await db
-    .select()
-    .from(customersTable)
-    .where(eq(customersTable.id, id));
-
-  if (!customer) {
-    res.status(404).json({ error: "Customer not found" });
-    return;
-  }
-
-  if (customer.paymentMethod !== "zelle") {
-    res.status(400).json({ error: "Mark as paid is only available for Zelle customers" });
-    return;
-  }
-
-  const { note } = (req.body || {}) as { note?: string };
-
-  const [updated] = await db
-    .update(customersTable)
-    .set({ subscriptionStatus: "active", updatedAt: new Date() })
-    .where(eq(customersTable.id, id))
-    .returning();
-
-  logger.info({ customerId: id, note: note || "none" }, "Zelle customer manually marked as paid");
-  res.json(updated);
 });
 
 export default router;
