@@ -56,39 +56,51 @@ router.post("/signup", async (req, res) => {
     onboardingTriggered: false,
   }).returning();
 
-  let onboardingTriggered = false;
+  if (resolvedBizId == null) {
+    logger.warn({ signupId: signup.id }, "No valid businessId — signup saved without onboarding emails");
+    res.json({ success: true, signupId: signup.id, onboardingTriggered: false });
+    return;
+  }
 
   try {
-    if (resolvedBizId != null) {
-      const [business] = await db.select().from(businessesTable).where(eq(businessesTable.id, resolvedBizId));
+    const [business] = await db.select().from(businessesTable).where(eq(businessesTable.id, resolvedBizId));
+    if (!business) {
+      logger.warn({ signupId: signup.id, resolvedBizId }, "Business not found — signup saved without onboarding emails");
+      res.json({ success: true, signupId: signup.id, onboardingTriggered: false });
+      return;
+    }
 
-      if (business) {
-        let effectiveInboxId = business.emailInboxId;
-        let effectiveEmailAddress = business.emailAddress;
+    let inboxId = business.emailInboxId;
+    let fromAddress = business.emailAddress;
 
-        if (!effectiveInboxId) {
-          const [site] = await db.select().from(businessSitesTable).where(eq(businessSitesTable.businessId, resolvedBizId));
-          effectiveInboxId = site?.emailInboxId ?? null;
-          effectiveEmailAddress = site?.emailAddress ?? null;
-        }
+    if (!inboxId) {
+      const [site] = await db.select().from(businessSitesTable).where(eq(businessSitesTable.businessId, resolvedBizId));
+      inboxId = site?.emailInboxId ?? null;
+      fromAddress = site?.emailAddress ?? null;
+    }
 
-        if (!effectiveInboxId) {
-          const provisioned = await ensureInbox(resolvedBizId, business.name);
-          if (provisioned) {
-            effectiveInboxId = provisioned.id;
-            effectiveEmailAddress = provisioned.emailAddress;
-          }
-        }
+    if (!inboxId) {
+      const provisioned = await ensureInbox(resolvedBizId, business.name);
+      if (provisioned) {
+        inboxId = provisioned.id;
+        fromAddress = provisioned.emailAddress;
+      }
+    }
 
-        if (effectiveInboxId) {
-          const platformList = platforms.join(" and ");
-          const planContext = planName ? ` They selected the ${planName} plan.` : "";
-          const platformContext = [
-            platforms.includes("Google") && googleListingUrl ? `Google Business: ${googleListingUrl}` : null,
-            platforms.includes("Yelp") && yelpListingUrl ? `Yelp: ${yelpListingUrl}` : null,
-          ].filter(Boolean).join("\n");
+    if (!inboxId) {
+      logger.warn({ signupId: signup.id }, "No inbox available — signup saved without onboarding emails");
+      res.json({ success: true, signupId: signup.id, onboardingTriggered: false });
+      return;
+    }
 
-          const prompt = `You are a professional email copywriter for an AI Review Reply & Reputation Autopilot service. Generate a 3-email onboarding sequence for a new customer.
+    const platformList = platforms.join(" and ");
+    const planContext = planName ? ` They selected the ${planName} plan.` : "";
+    const platformContext = [
+      platforms.includes("Google") && googleListingUrl ? `Google Business: ${googleListingUrl}` : null,
+      platforms.includes("Yelp") && yelpListingUrl ? `Yelp: ${yelpListingUrl}` : null,
+    ].filter(Boolean).join("\n");
+
+    const prompt = `You are a professional email copywriter for an AI Review Reply & Reputation Autopilot service. Generate a 3-email onboarding sequence for a new customer.
 
 New Customer: ${fullName}
 Business: ${businessName}
@@ -121,80 +133,77 @@ Respond with ONLY valid JSON array:
   }
 ]`;
 
-          let generatedEmails: { subject: string; body: string; delayDays: number }[] = [];
-          try {
-            const response = await openai.chat.completions.create({
-              model: "gpt-5.2",
-              max_completion_tokens: 2048,
-              messages: [{ role: "user", content: prompt }],
-            });
-            const raw = response.choices[0]?.message?.content ?? "[]";
-            const jsonMatch = raw.match(/\[[\s\S]*\]/);
-            generatedEmails = jsonMatch ? JSON.parse(jsonMatch[0]) : [];
-          } catch (err) {
-            logger.error({ err }, "Failed to generate onboarding sequence for signup");
-          }
+    let generatedEmails: { subject: string; body: string; delayDays: number }[] = [];
+    try {
+      const response = await openai.chat.completions.create({
+        model: "gpt-5.2",
+        max_completion_tokens: 2048,
+        messages: [{ role: "user", content: prompt }],
+      });
+      const raw = response.choices[0]?.message?.content ?? "[]";
+      const jsonMatch = raw.match(/\[[\s\S]*\]/);
+      generatedEmails = jsonMatch ? JSON.parse(jsonMatch[0]) : [];
+    } catch (err) {
+      logger.error({ err }, "Failed to generate onboarding sequence for signup");
+      res.status(500).json({ error: "Failed to generate onboarding email sequence. Please try again." });
+      return;
+    }
 
-          const now = new Date();
-          for (const emailItem of generatedEmails) {
-            const isImmediate = emailItem.delayDays === 0;
-            const scheduledFor = isImmediate ? null : new Date(now.getTime() + emailItem.delayDays * 24 * 60 * 60 * 1000);
+    if (generatedEmails.length === 0) {
+      logger.error({ signupId: signup.id }, "No emails generated for onboarding sequence");
+      res.status(500).json({ error: "Failed to generate onboarding email sequence. Please try again." });
+      return;
+    }
 
-            let messageId: string | undefined;
-            let threadId: string | undefined;
-            let status = isImmediate ? "pending" : "pending";
+    const now = new Date();
+    let welcomeSent = false;
 
-            if (isImmediate) {
-              const result = await sendEmail(effectiveInboxId, email, emailItem.subject, emailItem.body);
-              if (result) {
-                messageId = result.messageId;
-                threadId = result.threadId;
-                status = "sent";
-                onboardingTriggered = true;
-                logger.info({ signupId: signup.id, to: email }, "Welcome email sent for new signup");
-              }
-            }
+    for (const emailItem of generatedEmails) {
+      const isImmediate = emailItem.delayDays === 0;
+      const scheduledFor = isImmediate ? null : new Date(now.getTime() + emailItem.delayDays * 24 * 60 * 60 * 1000);
 
-            await db.insert(outreachEmailsTable).values({
-              businessId: resolvedBizId,
-              inboxId: effectiveInboxId,
-              messageId: messageId ?? null,
-              threadId: threadId ?? null,
-              direction: "outbound",
-              toAddress: email,
-              fromAddress: effectiveEmailAddress ?? null,
-              subject: emailItem.subject,
-              body: emailItem.body,
-              status,
-              agentType: "sales",
-              sentAt: isImmediate && status === "sent" ? now : null,
-              scheduledFor,
-            });
-          }
+      let messageId: string | undefined;
+      let threadId: string | undefined;
+      let status = "pending";
 
-          if (onboardingTriggered) {
-            await db.update(signupsTable)
-              .set({ onboardingTriggered: true, updatedAt: new Date() })
-              .where(eq(signupsTable.id, signup.id));
-          }
-
-          logger.info({ signupId: signup.id, sequenceCount: generatedEmails.length }, "Onboarding sequence saved for new signup");
-        } else {
-          logger.warn({ signupId: signup.id }, "No inbox available — signup saved without onboarding emails");
+      if (isImmediate) {
+        const result = await sendEmail(inboxId, email, emailItem.subject, emailItem.body);
+        if (result) {
+          messageId = result.messageId;
+          threadId = result.threadId;
+          status = "sent";
+          welcomeSent = true;
         }
       }
-    } else {
-      logger.warn({ signupId: signup.id }, "No valid businessId — signup saved without onboarding emails");
+
+      await db.insert(outreachEmailsTable).values({
+        businessId: resolvedBizId,
+        inboxId,
+        messageId: messageId ?? null,
+        threadId: threadId ?? null,
+        direction: "outbound",
+        toAddress: email,
+        fromAddress: fromAddress ?? null,
+        subject: emailItem.subject,
+        body: emailItem.body,
+        status,
+        agentType: "sales",
+        sentAt: status === "sent" ? now : null,
+        scheduledFor,
+      });
     }
+
+    await db.update(signupsTable)
+      .set({ onboardingTriggered: true, updatedAt: new Date() })
+      .where(eq(signupsTable.id, signup.id));
+
+    logger.info({ signupId: signup.id, sequenceCount: generatedEmails.length, welcomeSent }, "Onboarding sequence saved for new signup");
+
+    res.json({ success: true, signupId: signup.id, onboardingTriggered: true });
   } catch (err) {
     logger.error({ err, signupId: signup.id }, "Failed to trigger onboarding sequence for signup");
+    res.status(500).json({ error: "Failed to set up onboarding sequence. Please try again." });
   }
-
-  res.json({
-    success: true,
-    signupId: signup.id,
-    onboardingTriggered,
-  });
 });
 
 export default router;
