@@ -25,7 +25,17 @@ const SKIP_DIRS = new Set([
   "generated",
 ]);
 
-const SKIP_EXTENSIONS = new Set([".map", ".log"]);
+const SKIP_EXTENSIONS = new Set([".map", ".log", ".pem", ".p12", ".pfx", ".key", ".crt", ".cer"]);
+
+const SKIP_FILE_PATTERNS = [
+  /^\.env(\..*)?$/,
+  /^\.secret/i,
+  /^id_rsa/,
+  /^id_ed25519/,
+  /^.*\.ppk$/,
+  /^credentials\.json$/,
+  /^service.?account.*\.json$/i,
+];
 
 export interface SyncStatus {
   lastSyncAt: string | null;
@@ -107,6 +117,7 @@ function collectSourceFiles(rootDir: string): Map<string, Buffer> {
       } else if (stat.isFile()) {
         const ext = entry.includes(".") ? "." + entry.split(".").pop() : "";
         if (SKIP_EXTENSIONS.has(ext)) continue;
+        if (SKIP_FILE_PATTERNS.some((re) => re.test(entry))) continue;
         if (stat.size > 5 * 1024 * 1024) continue;
         try {
           const content = readFileSync(fullPath);

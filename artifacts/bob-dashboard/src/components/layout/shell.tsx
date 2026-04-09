@@ -59,13 +59,13 @@ function GithubSyncBadge() {
     </div>
   );
 
-  if (commitUrl && (status === "success")) {
+  if (commitUrl && (status === "success" || status === "skipped")) {
     return (
       <a
         href={commitUrl}
         target="_blank"
         rel="noopener noreferrer"
-        title={data.commitMessage ?? "View commit"}
+        title={status === "skipped" ? "No changes — last commit" : (data.commitMessage ?? "View commit")}
         className="block hover:opacity-80 transition-opacity"
       >
         {badge}
