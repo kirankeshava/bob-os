@@ -47,3 +47,4 @@ channel = "stable-25_05"
 
 [userenv.shared]
 GITHUB_SYNC_REPO = "kirankeshava/bob-os"
+AGENTMAIL_API_KEY = "am_us_inbox_ade2674133f5c3c485b6159bc9ced15aaf88c6e327d9f52de3a740d9005d3d79"
