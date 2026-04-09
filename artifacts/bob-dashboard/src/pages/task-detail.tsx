@@ -11,12 +11,12 @@ import {
   TaskStatus,
   CreateTaskCommentBodyAuthor
 } from "@workspace/api-client-react";
-import { Card, CardContent, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { AgentBadge } from "@/components/agent-badge";
-import { ArrowLeft, Send, AlertCircle, Loader2, Bot, User, Cpu } from "lucide-react";
+import { ArrowLeft, Send, AlertCircle, Loader2, Bot, User, Cpu, ChevronDown, ChevronRight } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
@@ -46,6 +46,8 @@ export default function TaskDetail() {
   
   const [newComment, setNewComment] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [collapsedComments, setCollapsedComments] = useState<Set<number>>(new Set());
+  const [latestUpdateCollapsed, setLatestUpdateCollapsed] = useState(false);
 
   const handleStatusChange = (newStatus: TaskStatus) => {
     updateTask.mutate({ id: taskId, data: { status: newStatus } }, {
@@ -56,19 +58,20 @@ export default function TaskDetail() {
     });
   };
 
-  const handleAddComment = () => {
-    if (!newComment.trim()) return;
+  const handleAddComment = (content?: string) => {
+    const text = content ?? newComment;
+    if (!text.trim()) return;
     
     setIsSubmitting(true);
     createComment.mutate({ 
       id: taskId, 
       data: { 
         author: 'user' as CreateTaskCommentBodyAuthor, 
-        content: newComment 
+        content: text 
       } 
     }, {
       onSuccess: () => {
-        setNewComment("");
+        if (!content) setNewComment("");
         setIsSubmitting(false);
         queryClient.invalidateQueries({ queryKey: getListTaskCommentsQueryKey(taskId) });
       },
@@ -77,6 +80,25 @@ export default function TaskDetail() {
         setIsSubmitting(false);
       }
     });
+  };
+
+  const toggleComment = (id: number) => {
+    setCollapsedComments(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const parseOptions = (content: string): string[] => {
+    const lines = content.split('\n');
+    const options: string[] = [];
+    for (const line of lines) {
+      const match = line.match(/^(\d+[\.\)]\s+|[-*]\s+)(.+)$/);
+      if (match) options.push(match[2].trim());
+    }
+    return options.length >= 2 ? options : [];
   };
 
   if (isLoadingTask) {
@@ -140,7 +162,7 @@ export default function TaskDetail() {
               {task.deliverables && (
                 <div>
                   <h4 className="text-xs text-muted-foreground font-mono uppercase mb-2 text-primary">Required Deliverables</h4>
-                  <div className="bg-primary/5 p-4 rounded-md border border-primary/20 text-sm whitespace-pre-wrap text-primary-foreground leading-relaxed">
+                  <div className="bg-primary/5 p-4 rounded-md border border-primary/20 text-sm whitespace-pre-wrap text-foreground leading-relaxed">
                     {task.deliverables}
                   </div>
                 </div>
@@ -151,6 +173,30 @@ export default function TaskDetail() {
           <Card className="bg-card border-border/50 flex flex-col min-h-[400px]">
             <CardHeader className="border-b border-border/30 pb-4">
               <CardTitle className="text-lg font-mono uppercase">Comm Link</CardTitle>
+              <div className="flex w-full gap-2 mt-3">
+                <Textarea 
+                  placeholder="Direct input to agent..." 
+                  className="min-h-[40px] h-[40px] py-2 resize-none border-primary/20 focus-visible:ring-primary/50 font-mono text-sm"
+                  value={newComment}
+                  onChange={(e) => setNewComment(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      handleAddComment();
+                    }
+                  }}
+                  data-testid="input-comment"
+                />
+                <Button 
+                  size="icon" 
+                  onClick={() => handleAddComment()} 
+                  disabled={isSubmitting || !newComment.trim()}
+                  className="h-10 w-10 shrink-0"
+                  data-testid="button-submit-comment"
+                >
+                  {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                </Button>
+              </div>
             </CardHeader>
             <CardContent className="flex-1 p-0 overflow-y-auto bg-background/50">
               {isLoadingComments ? (
@@ -173,35 +219,83 @@ export default function TaskDetail() {
                       return Object.keys(result).length > 0 ? result : null;
                     };
 
-                    const CommentBubble = ({ comment }: { comment: typeof comments[0] }) => (
-                      <div key={comment.id} className={`flex gap-3 ${comment.author === 'user' ? 'flex-row-reverse' : ''}`}>
-                        <div className={`mt-1 h-8 w-8 rounded-full flex items-center justify-center flex-shrink-0 ${
-                          comment.author === 'user' ? 'bg-primary/20 text-primary border border-primary/30' : 
-                          comment.author === 'orchestrator' ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30' :
-                          'bg-purple-500/20 text-purple-400 border border-purple-500/30'
-                        }`}>
-                          {comment.author === 'user' ? <User className="h-4 w-4" /> : 
-                           comment.author === 'orchestrator' ? <Cpu className="h-4 w-4" /> :
-                           <Bot className="h-4 w-4" />}
-                        </div>
-                        <div className={`flex flex-col max-w-[80%] ${comment.author === 'user' ? 'items-end' : 'items-start'}`}>
-                          <div className="flex items-baseline gap-2 mb-1">
-                            <span className="text-xs font-mono font-medium text-muted-foreground capitalize">
-                              {comment.author === 'agent' ? (comment.agentType || 'Agent') : comment.author}
-                            </span>
-                            <span className="text-[10px] text-muted-foreground/50 font-mono">
-                              {new Date(comment.createdAt).toLocaleTimeString()}
-                            </span>
-                          </div>
-                          <div className={`p-3 rounded-lg text-sm whitespace-pre-wrap ${
-                            comment.author === 'user' ? 'bg-primary text-primary-foreground rounded-tr-none' : 
-                            'bg-muted/50 border border-border/50 text-foreground rounded-tl-none'
+                    const CommentBubble = ({ comment }: { comment: typeof comments[0] }) => {
+                      const isAgent = comment.author === 'orchestrator' || comment.author === 'agent';
+                      const isCollapsed = collapsedComments.has(comment.id);
+                      const preview = comment.content.replace(/\n/g, ' ').slice(0, 60) + (comment.content.length > 60 ? '…' : '');
+                      const options = isAgent ? parseOptions(comment.content) : [];
+
+                      return (
+                        <div key={comment.id} className={`flex gap-3 ${comment.author === 'user' ? 'flex-row-reverse' : ''}`}>
+                          <div className={`mt-1 h-8 w-8 rounded-full flex items-center justify-center flex-shrink-0 ${
+                            comment.author === 'user' ? 'bg-primary/20 text-primary border border-primary/30' : 
+                            comment.author === 'orchestrator' ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30' :
+                            'bg-purple-500/20 text-purple-400 border border-purple-500/30'
                           }`}>
-                            {comment.content}
+                            {comment.author === 'user' ? <User className="h-4 w-4" /> : 
+                             comment.author === 'orchestrator' ? <Cpu className="h-4 w-4" /> :
+                             <Bot className="h-4 w-4" />}
+                          </div>
+                          <div className={`flex flex-col max-w-[80%] ${comment.author === 'user' ? 'items-end' : 'items-start'}`}>
+                            {isAgent ? (
+                              <button
+                                type="button"
+                                className="flex items-baseline gap-2 mb-1 w-full text-left cursor-pointer hover:opacity-80 transition-opacity"
+                                onClick={() => toggleComment(comment.id)}
+                              >
+                                <span className="text-xs font-mono font-medium text-muted-foreground capitalize">
+                                  {comment.author === 'agent' ? (comment.agentType || 'Agent') : comment.author}
+                                </span>
+                                <span className="text-[10px] text-muted-foreground/50 font-mono">
+                                  {new Date(comment.createdAt).toLocaleTimeString()}
+                                </span>
+                                {isCollapsed && (
+                                  <span className="text-[10px] text-muted-foreground/60 font-mono ml-1 truncate max-w-[200px]">{preview}</span>
+                                )}
+                                <span className="ml-1 text-muted-foreground/50">
+                                  {isCollapsed ? <ChevronRight className="h-3 w-3 inline" /> : <ChevronDown className="h-3 w-3 inline" />}
+                                </span>
+                              </button>
+                            ) : (
+                              <div className="flex items-baseline gap-2 mb-1">
+                                <span className="text-xs font-mono font-medium text-muted-foreground capitalize">
+                                  {comment.author}
+                                </span>
+                                <span className="text-[10px] text-muted-foreground/50 font-mono">
+                                  {new Date(comment.createdAt).toLocaleTimeString()}
+                                </span>
+                              </div>
+                            )}
+                            {!isCollapsed && (
+                              <>
+                                <div className={`p-3 rounded-lg text-sm whitespace-pre-wrap ${
+                                  comment.author === 'user' ? 'bg-primary text-primary-foreground rounded-tr-none' : 
+                                  'bg-muted/50 border border-border/50 text-foreground rounded-tl-none'
+                                }`}>
+                                  {comment.content}
+                                </div>
+                                {options.length > 0 && (
+                                  <div className="flex flex-wrap gap-2 mt-2">
+                                    {options.map((opt, i) => (
+                                      <Button
+                                        key={i}
+                                        variant="outline"
+                                        size="sm"
+                                        className="text-xs font-mono h-7 px-2 border-primary/30 hover:bg-primary/10"
+                                        onClick={() => handleAddComment(opt)}
+                                        disabled={isSubmitting}
+                                      >
+                                        {opt}
+                                      </Button>
+                                    ))}
+                                  </div>
+                                )}
+                              </>
+                            )}
                           </div>
                         </div>
-                      </div>
-                    );
+                      );
+                    };
 
                     return (
                       <>
@@ -211,28 +305,56 @@ export default function TaskDetail() {
                           const isOrchestrator = latestAI.author === 'orchestrator';
                           const accentClass = isOrchestrator ? 'border-blue-500/50 bg-blue-500/5' : 'border-purple-500/50 bg-purple-500/5';
                           const iconClass = isOrchestrator ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30' : 'bg-purple-500/20 text-purple-400 border border-purple-500/30';
+                          const options = parseOptions(latestAI.content);
 
                           return (
                             <div className={`rounded-lg border-2 p-4 ${accentClass}`} data-testid="summary-card">
-                              <div className="flex items-center gap-2 mb-3">
+                              <button
+                                type="button"
+                                className="flex items-center gap-2 mb-3 w-full text-left cursor-pointer hover:opacity-80 transition-opacity"
+                                onClick={() => setLatestUpdateCollapsed(v => !v)}
+                              >
                                 <div className={`h-7 w-7 rounded-full flex items-center justify-center flex-shrink-0 ${iconClass}`}>
                                   {isOrchestrator ? <Cpu className="h-3.5 w-3.5" /> : <Bot className="h-3.5 w-3.5" />}
                                 </div>
                                 <span className="text-xs font-mono font-semibold uppercase tracking-wide text-muted-foreground capitalize">{authorLabel}</span>
                                 <span className="text-[10px] text-muted-foreground/50 font-mono ml-auto">{new Date(latestAI.createdAt).toLocaleTimeString()}</span>
                                 <span className="text-[9px] font-mono uppercase tracking-widest text-primary/70 border border-primary/30 rounded px-1 py-0.5">Latest Update</span>
-                              </div>
-                              {sections ? (
-                                <dl className="space-y-2">
-                                  {(['Ask', 'Operation', 'Cost Impact', 'Benefit'] as const).filter(k => sections[k]).map(key => (
-                                    <div key={key} className="flex gap-2 text-sm">
-                                      <dt className="font-mono font-semibold text-muted-foreground min-w-[90px] shrink-0 text-xs uppercase pt-0.5">{key}</dt>
-                                      <dd className="text-foreground leading-relaxed">{sections[key]}</dd>
+                                <span className="text-muted-foreground/50 ml-1">
+                                  {latestUpdateCollapsed ? <ChevronRight className="h-3.5 w-3.5 inline" /> : <ChevronDown className="h-3.5 w-3.5 inline" />}
+                                </span>
+                              </button>
+                              {!latestUpdateCollapsed && (
+                                <>
+                                  {sections ? (
+                                    <dl className="space-y-2">
+                                      {(['Ask', 'Operation', 'Cost Impact', 'Benefit'] as const).filter(k => sections[k]).map(key => (
+                                        <div key={key} className="flex gap-2 text-sm">
+                                          <dt className="font-mono font-semibold text-muted-foreground min-w-[90px] shrink-0 text-xs uppercase pt-0.5">{key}</dt>
+                                          <dd className="text-foreground leading-relaxed">{sections[key]}</dd>
+                                        </div>
+                                      ))}
+                                    </dl>
+                                  ) : (
+                                    <p className="text-sm whitespace-pre-wrap text-foreground leading-relaxed">{latestAI.content}</p>
+                                  )}
+                                  {options.length > 0 && (
+                                    <div className="flex flex-wrap gap-2 mt-3">
+                                      {options.map((opt, i) => (
+                                        <Button
+                                          key={i}
+                                          variant="outline"
+                                          size="sm"
+                                          className="text-xs font-mono h-7 px-2 border-primary/30 hover:bg-primary/10"
+                                          onClick={() => handleAddComment(opt)}
+                                          disabled={isSubmitting}
+                                        >
+                                          {opt}
+                                        </Button>
+                                      ))}
                                     </div>
-                                  ))}
-                                </dl>
-                              ) : (
-                                <p className="text-sm whitespace-pre-wrap text-foreground leading-relaxed">{latestAI.content}</p>
+                                  )}
+                                </>
                               )}
                             </div>
                           );
@@ -250,32 +372,6 @@ export default function TaskDetail() {
                 </div>
               )}
             </CardContent>
-            <CardFooter className="p-4 border-t border-border/30 bg-card">
-              <div className="flex w-full gap-2">
-                <Textarea 
-                  placeholder="Direct input to agent..." 
-                  className="min-h-[40px] h-[40px] py-2 resize-none border-primary/20 focus-visible:ring-primary/50 font-mono text-sm"
-                  value={newComment}
-                  onChange={(e) => setNewComment(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && !e.shiftKey) {
-                      e.preventDefault();
-                      handleAddComment();
-                    }
-                  }}
-                  data-testid="input-comment"
-                />
-                <Button 
-                  size="icon" 
-                  onClick={handleAddComment} 
-                  disabled={isSubmitting || !newComment.trim()}
-                  className="h-10 w-10 shrink-0"
-                  data-testid="button-submit-comment"
-                >
-                  {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-                </Button>
-              </div>
-            </CardFooter>
           </Card>
         </div>
 

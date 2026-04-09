@@ -173,7 +173,6 @@ async function buildGeneratedArtifacts(): Promise<Map<string, Buffer>> {
 
 const lastBlobShas = new Map<string, string>();
 let baselineLoaded = false;
-let baselineFiltered = false;
 let isSyncing = false;
 
 async function githubRequest(
@@ -300,15 +299,6 @@ async function runSync() {
     const sourceFiles = collectSourceFiles(repoRoot);
     const generatedFiles = await buildGeneratedArtifacts();
     const allFiles = new Map<string, Buffer>([...sourceFiles, ...generatedFiles]);
-
-    if (!baselineFiltered) {
-      for (const trackedPath of [...lastBlobShas.keys()]) {
-        if (!allFiles.has(trackedPath) && !trackedPath.startsWith("generated/")) {
-          lastBlobShas.delete(trackedPath);
-        }
-      }
-      baselineFiltered = true;
-    }
 
     const changedOrNew: Map<string, Buffer> = new Map();
     for (const [filePath, content] of allFiles) {
