@@ -5,12 +5,12 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { Shell } from "@/components/layout/shell";
 import Dashboard from "@/pages/dashboard";
 import BusinessDetail from "@/pages/business-detail";
-import BusinessArtifactsPage from "@/pages/business-artifacts";
 import TaskDetail from "@/pages/task-detail";
 import AgentRuns from "@/pages/agent-runs";
 import BusinessSitePage from "@/pages/business-site";
 import SkillsPage from "@/pages/skills";
 import CustomersPage from "@/pages/customers";
+import CeoPage from "@/pages/ceo";
 import NotFound from "@/pages/not-found";
 import { PasswordGate } from "@/components/password-gate";
 
@@ -39,12 +39,12 @@ function Router() {
       <Shell>
         <Switch>
           <Route path="/" component={Dashboard} />
-          <Route path="/businesses/:id/artifacts" component={BusinessArtifactsPage} />
           <Route path="/businesses/:id" component={BusinessDetail} />
           <Route path="/businesses/:id/tasks/:taskId" component={TaskDetail} />
           <Route path="/agent-runs" component={AgentRuns} />
           <Route path="/skills" component={SkillsPage} />
           <Route path="/customers" component={CustomersPage} />
+          <Route path="/ceo" component={CeoPage} />
           <Route component={NotFound} />
         </Switch>
       </Shell>
