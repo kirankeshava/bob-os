@@ -13,7 +13,6 @@ import signupRouter from "./signup";
 import skillsRouter from "./skills";
 import customersRouter from "./customers";
 import ceoReviewsRouter from "./ceo-reviews";
-import ceoRouter from "./ceo";
 
 const router: IRouter = Router();
 
@@ -31,6 +30,5 @@ router.use("/sync", syncRouter);
 router.use("/businesses/:businessId/signup", signupRouter);
 router.use("/skills", skillsRouter);
 router.use("/customers", customersRouter);
-router.use("/ceo", ceoRouter);
 
 export default router;
