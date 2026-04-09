@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { eq, desc } from "drizzle-orm";
+import { eq, desc, and, lt, gte } from "drizzle-orm";
 import { db, businessesTable, tasksTable, taskCommentsTable, agentRunsTable } from "@workspace/db";
 
 const router = Router();
@@ -7,6 +7,7 @@ const router = Router();
 router.get("/dashboard", async (_req, res) => {
   const now = Date.now();
   const oneDayMs = 24 * 60 * 60 * 1000;
+  const sixHoursMs = 6 * 60 * 60 * 1000;
 
   const businesses = await db.select().from(businessesTable).orderBy(businessesTable.rank);
   const allTasks = await db.select().from(tasksTable).orderBy(tasksTable.updatedAt);
@@ -18,12 +19,12 @@ router.get("/dashboard", async (_req, res) => {
     .from(taskCommentsTable)
     .orderBy(desc(taskCommentsTable.createdAt));
 
-  const commentsByTask = new Map<number, typeof allComments[0]>();
+  const agentCommentsByTask = new Map<number, typeof allComments[0]>();
   for (const comment of allComments) {
-    if (!commentsByTask.has(comment.taskId)) {
+    if (!agentCommentsByTask.has(comment.taskId)) {
       const isAgent = comment.author === "orchestrator" || comment.author === "agent";
       if (isAgent) {
-        commentsByTask.set(comment.taskId, comment);
+        agentCommentsByTask.set(comment.taskId, comment);
       }
     }
   }
@@ -37,7 +38,7 @@ router.get("/dashboard", async (_req, res) => {
 
   const waitingApprovalItems = waitingTasks.map((task) => {
     const business = businesses.find((b) => b.id === task.businessId);
-    const agentComment = commentsByTask.get(task.id) ?? null;
+    const agentComment = agentCommentsByTask.get(task.id) ?? null;
     const latestComment = latestCommentsByTask.get(task.id) ?? null;
     const waitMs = now - new Date(task.updatedAt).getTime();
     const waitMins = Math.floor(waitMs / 60000);
@@ -124,6 +125,19 @@ router.get("/dashboard", async (_req, res) => {
 
   waitingApprovalItems.sort((a, b) => b.waitMins - a.waitMins);
 
+  const activeAgentRuns = await db
+    .select()
+    .from(agentRunsTable)
+    .where(eq(agentRunsTable.status, "running"))
+    .orderBy(desc(agentRunsTable.updatedAt));
+
+  const activeAgentsByBusiness = new Map<number, number>();
+  for (const run of activeAgentRuns) {
+    if (run.businessId != null) {
+      activeAgentsByBusiness.set(run.businessId, (activeAgentsByBusiness.get(run.businessId) ?? 0) + 1);
+    }
+  }
+
   const projectHealth = businesses.map((biz) => {
     const tasks = allTasks.filter((t) => t.businessId === biz.id);
     const totalTasks = tasks.length;
@@ -131,6 +145,7 @@ router.get("/dashboard", async (_req, res) => {
     const waitingCount = tasks.filter((t) => t.status === "waiting_approval").length;
     const inProgressCount = tasks.filter((t) => t.status === "in_progress").length;
     const completionPct = totalTasks > 0 ? Math.round((closedTasks / totalTasks) * 100) : 0;
+    const activeAgentsCount = activeAgentsByBusiness.get(biz.id) ?? 0;
 
     const mostRecentUpdate = tasks.reduce((latest, t) => {
       const d = new Date(t.updatedAt).getTime();
@@ -162,16 +177,11 @@ router.get("/dashboard", async (_req, res) => {
       waitingCount,
       inProgressCount,
       closedCount: closedTasks,
+      activeAgentsCount,
       daysSinceProgress,
       stallStatus,
     };
   });
-
-  const activeAgentRuns = await db
-    .select()
-    .from(agentRunsTable)
-    .where(eq(agentRunsTable.status, "running"))
-    .orderBy(desc(agentRunsTable.updatedAt));
 
   const agentRoster = activeAgentRuns.map((run) => {
     const biz = businesses.find((b) => b.id === run.businessId);
@@ -198,6 +208,25 @@ router.get("/dashboard", async (_req, res) => {
     (p) => p.stallStatus === "stalled_waiting" || p.stallStatus === "stalled_inactive"
   ).length;
 
+  const sixHoursAgo = new Date(now - sixHoursMs);
+  const recentlyWaiting = allTasks.filter(
+    (t) => t.status === "waiting_approval" && new Date(t.updatedAt) >= sixHoursAgo
+  ).length;
+  const olderWaiting = totalWaiting - recentlyWaiting;
+  let waitingTrend: "increasing" | "decreasing" | "stable" = "stable";
+  if (recentlyWaiting > 0 && olderWaiting === 0) waitingTrend = "increasing";
+  else if (olderWaiting > recentlyWaiting) waitingTrend = "decreasing";
+  else if (recentlyWaiting > olderWaiting && totalWaiting > 1) waitingTrend = "increasing";
+
+  const startDate = new Date("2026-04-08");
+  const endDate = new Date(startDate);
+  endDate.setDate(endDate.getDate() + 30);
+  const daysRemaining = Math.max(0, Math.ceil((endDate.getTime() - now) / oneDayMs));
+  const initialBudget = 1000;
+  const budgetUsed = 0;
+  const budgetUtilizationPct = Math.round((budgetUsed / initialBudget) * 100);
+  const runwayDays = daysRemaining;
+
   const recentApprovals = allTasks
     .filter((t) => t.status === "in_progress" || t.status === "closed")
     .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
@@ -220,9 +249,15 @@ router.get("/dashboard", async (_req, res) => {
     agentRoster,
     portfolioMetrics: {
       totalWaiting,
+      waitingTrend,
       avgWaitMins,
       activeAgentsCount,
       projectsAtRisk,
+      budgetUsed,
+      initialBudget,
+      budgetUtilizationPct,
+      runwayDays,
+      daysRemaining,
     },
     recentApprovals,
   });

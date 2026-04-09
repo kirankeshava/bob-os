@@ -792,6 +792,20 @@ paths:
               schema:
                 $ref: "#/components/schemas/DashboardSummary"
 
+  /owner/dashboard:
+    get:
+      operationId: getOwnerDashboard
+      tags: [businesses]
+      summary: Get owner command center dashboard data
+      description: Aggregates all waiting_approval tasks, project health, active agents, and portfolio metrics for the owner
+      responses:
+        "200":
+          description: Owner dashboard data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OwnerDashboard"
+
   /agent/research:
     post:
       operationId: triggerResearch
@@ -1745,3 +1759,206 @@ components:
         - to
         - subject
         - body
+
+    WaitingApprovalItem:
+      type: object
+      properties:
+        taskId:
+          type: integer
+        businessId:
+          type: integer
+        businessName:
+          type: string
+        title:
+          type: string
+        agentType:
+          type: string
+        assignedAgent:
+          type: ["string", "null"]
+        priority:
+          type: string
+        waitMins:
+          type: integer
+        urgency:
+          type: string
+          enum: [critical, high, medium, low]
+        actionNeeded:
+          type: string
+        whyBlocked:
+          type: string
+        valueAdd:
+          type: string
+        latestCommentContent:
+          type: ["string", "null"]
+        updatedAt:
+          type: string
+      required:
+        - taskId
+        - businessId
+        - businessName
+        - title
+        - agentType
+        - priority
+        - waitMins
+        - urgency
+        - actionNeeded
+        - whyBlocked
+        - valueAdd
+        - updatedAt
+
+    ProjectHealthItem:
+      type: object
+      properties:
+        businessId:
+          type: integer
+        businessName:
+          type: string
+        businessStatus:
+          type: string
+        totalTasks:
+          type: integer
+        completionPct:
+          type: integer
+        waitingCount:
+          type: integer
+        inProgressCount:
+          type: integer
+        closedCount:
+          type: integer
+        activeAgentsCount:
+          type: integer
+        daysSinceProgress:
+          type: integer
+        stallStatus:
+          type: string
+          enum: [stalled_waiting, stalled_inactive, healthy, no_tasks]
+      required:
+        - businessId
+        - businessName
+        - businessStatus
+        - totalTasks
+        - completionPct
+        - waitingCount
+        - inProgressCount
+        - closedCount
+        - activeAgentsCount
+        - daysSinceProgress
+        - stallStatus
+
+    AgentRosterItem:
+      type: object
+      properties:
+        runId:
+          type: integer
+        agentType:
+          type: string
+        businessId:
+          type: ["integer", "null"]
+        businessName:
+          type: string
+        currentTask:
+          type: ["object", "null"]
+          properties:
+            taskId:
+              type: integer
+            title:
+              type: string
+            status:
+              type: string
+        lastUpdate:
+          type: string
+        status:
+          type: string
+      required:
+        - runId
+        - agentType
+        - businessName
+        - lastUpdate
+        - status
+
+    OwnerPortfolioMetrics:
+      type: object
+      properties:
+        totalWaiting:
+          type: integer
+        waitingTrend:
+          type: string
+          enum: [increasing, decreasing, stable]
+        avgWaitMins:
+          type: integer
+        activeAgentsCount:
+          type: integer
+        projectsAtRisk:
+          type: integer
+        budgetUsed:
+          type: number
+        initialBudget:
+          type: number
+        budgetUtilizationPct:
+          type: integer
+        runwayDays:
+          type: integer
+        daysRemaining:
+          type: integer
+      required:
+        - totalWaiting
+        - waitingTrend
+        - avgWaitMins
+        - activeAgentsCount
+        - projectsAtRisk
+        - budgetUsed
+        - initialBudget
+        - budgetUtilizationPct
+        - runwayDays
+        - daysRemaining
+
+    RecentApprovalItem:
+      type: object
+      properties:
+        taskId:
+          type: integer
+        businessId:
+          type: integer
+        businessName:
+          type: string
+        title:
+          type: string
+        status:
+          type: string
+        updatedAt:
+          type: string
+      required:
+        - taskId
+        - businessId
+        - businessName
+        - title
+        - status
+        - updatedAt
+
+    OwnerDashboard:
+      type: object
+      properties:
+        waitingApprovalItems:
+          type: array
+          items:
+            $ref: "#/components/schemas/WaitingApprovalItem"
+        projectHealth:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProjectHealthItem"
+        agentRoster:
+          type: array
+          items:
+            $ref: "#/components/schemas/AgentRosterItem"
+        portfolioMetrics:
+          $ref: "#/components/schemas/OwnerPortfolioMetrics"
+        recentApprovals:
+          type: array
+          items:
+            $ref: "#/components/schemas/RecentApprovalItem"
+      required:
+        - waitingApprovalItems
+        - projectHealth
+        - agentRoster
+        - portfolioMetrics
+        - recentApprovals

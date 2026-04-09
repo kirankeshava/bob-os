@@ -24,6 +24,8 @@ import {
   Zap,
   Activity,
   TrendingUp,
+  TrendingDown,
+  Minus,
   Users,
   Target,
   BarChart2,
@@ -31,6 +33,7 @@ import {
   ArrowRight,
   Filter,
   RefreshCw,
+  Wallet,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
@@ -151,6 +154,7 @@ interface ProjectHealth {
   waitingCount: number;
   inProgressCount: number;
   closedCount: number;
+  activeAgentsCount: number;
   daysSinceProgress: number;
   stallStatus: "stalled_waiting" | "stalled_inactive" | "healthy" | "no_tasks";
 }
@@ -167,9 +171,15 @@ interface AgentRosterItem {
 
 interface PortfolioMetrics {
   totalWaiting: number;
+  waitingTrend: "increasing" | "decreasing" | "stable";
   avgWaitMins: number;
   activeAgentsCount: number;
   projectsAtRisk: number;
+  budgetUsed: number;
+  initialBudget: number;
+  budgetUtilizationPct: number;
+  runwayDays: number;
+  daysRemaining: number;
 }
 
 interface RecentApproval {
@@ -525,16 +535,29 @@ export default function OwnerPage() {
 
       {/* Portfolio Metrics */}
       {metrics && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          <Card className={`bg-card/40 border-border/50 ${metrics.totalWaiting > 0 ? "border-amber-500/40 bg-amber-500/5" : ""}`}>
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+          <Card className={`col-span-2 md:col-span-1 bg-card/40 border-border/50 ${metrics.totalWaiting > 0 ? "border-amber-500/40 bg-amber-500/5" : ""}`}>
             <CardContent className="p-3">
               <div className="flex items-center gap-1 text-[10px] text-muted-foreground uppercase font-mono mb-1">
-                <AlertTriangle className="h-3 w-3 text-amber-400" /> Awaiting Action
+                <AlertTriangle className="h-3 w-3 text-amber-400" /> Awaiting
               </div>
-              <p className={`text-2xl font-bold font-mono ${metrics.totalWaiting > 0 ? "text-amber-300" : "text-foreground"}`}>
-                {metrics.totalWaiting}
+              <div className="flex items-end gap-1.5">
+                <p className={`text-2xl font-bold font-mono ${metrics.totalWaiting > 0 ? "text-amber-300" : "text-foreground"}`}>
+                  {metrics.totalWaiting}
+                </p>
+                {metrics.waitingTrend === "increasing" && (
+                  <TrendingUp className="h-3.5 w-3.5 text-red-400 mb-1" />
+                )}
+                {metrics.waitingTrend === "decreasing" && (
+                  <TrendingDown className="h-3.5 w-3.5 text-green-400 mb-1" />
+                )}
+                {metrics.waitingTrend === "stable" && (
+                  <Minus className="h-3.5 w-3.5 text-muted-foreground/50 mb-1" />
+                )}
+              </div>
+              <p className="text-[10px] text-muted-foreground font-mono">
+                {metrics.waitingTrend === "increasing" ? "trending up" : metrics.waitingTrend === "decreasing" ? "trending down" : "stable"} · tasks waiting
               </p>
-              <p className="text-[10px] text-muted-foreground font-mono">tasks waiting on you</p>
             </CardContent>
           </Card>
 
@@ -544,17 +567,17 @@ export default function OwnerPage() {
                 <Clock className="h-3 w-3" /> Avg Wait
               </div>
               <p className="text-2xl font-bold font-mono text-foreground">{formatWait(metrics.avgWaitMins)}</p>
-              <p className="text-[10px] text-muted-foreground font-mono">average wait time</p>
+              <p className="text-[10px] text-muted-foreground font-mono">avg approval delay</p>
             </CardContent>
           </Card>
 
           <Card className="bg-card/40 border-border/50">
             <CardContent className="p-3">
               <div className="flex items-center gap-1 text-[10px] text-muted-foreground uppercase font-mono mb-1">
-                <Cpu className="h-3 w-3 text-blue-400" /> Active Agents
+                <Cpu className="h-3 w-3 text-blue-400" /> Agents
               </div>
               <p className="text-2xl font-bold font-mono text-foreground">{metrics.activeAgentsCount}</p>
-              <p className="text-[10px] text-muted-foreground font-mono">agents running now</p>
+              <p className="text-[10px] text-muted-foreground font-mono">running now</p>
             </CardContent>
           </Card>
 
@@ -567,6 +590,28 @@ export default function OwnerPage() {
                 {metrics.projectsAtRisk}
               </p>
               <p className="text-[10px] text-muted-foreground font-mono">projects stalling</p>
+            </CardContent>
+          </Card>
+
+          <Card className="bg-card/40 border-border/50">
+            <CardContent className="p-3">
+              <div className="flex items-center gap-1 text-[10px] text-muted-foreground uppercase font-mono mb-1">
+                <Wallet className="h-3 w-3 text-green-400" /> Budget
+              </div>
+              <p className="text-2xl font-bold font-mono text-foreground">${metrics.budgetUsed.toLocaleString()}</p>
+              <p className="text-[10px] text-muted-foreground font-mono">
+                of ${metrics.initialBudget.toLocaleString()} · {metrics.budgetUtilizationPct}% used
+              </p>
+            </CardContent>
+          </Card>
+
+          <Card className="bg-card/40 border-border/50">
+            <CardContent className="p-3">
+              <div className="flex items-center gap-1 text-[10px] text-muted-foreground uppercase font-mono mb-1">
+                <Activity className="h-3 w-3 text-primary" /> Runway
+              </div>
+              <p className="text-2xl font-bold font-mono text-foreground">{metrics.runwayDays}d</p>
+              <p className="text-[10px] text-muted-foreground font-mono">days remaining</p>
             </CardContent>
           </Card>
         </div>
@@ -632,7 +677,7 @@ export default function OwnerPage() {
                 <th className="text-center px-3 py-2 font-mono text-muted-foreground uppercase text-[10px]">Tasks</th>
                 <th className="text-center px-3 py-2 font-mono text-muted-foreground uppercase text-[10px]">Done %</th>
                 <th className="text-center px-3 py-2 font-mono text-muted-foreground uppercase text-[10px]">Waiting</th>
-                <th className="text-center px-3 py-2 font-mono text-muted-foreground uppercase text-[10px]">Active</th>
+                <th className="text-center px-3 py-2 font-mono text-muted-foreground uppercase text-[10px]">Agents</th>
                 <th className="text-center px-3 py-2 font-mono text-muted-foreground uppercase text-[10px]">Last Progress</th>
                 <th className="text-left px-3 py-2 font-mono text-muted-foreground uppercase text-[10px]">Health</th>
               </tr>
@@ -674,8 +719,8 @@ export default function OwnerPage() {
                       )}
                     </td>
                     <td className="px-3 py-2 text-center">
-                      {p.inProgressCount > 0 ? (
-                        <span className="text-blue-400 font-mono">{p.inProgressCount}</span>
+                      {p.activeAgentsCount > 0 ? (
+                        <span className="text-blue-400 font-mono">{p.activeAgentsCount}</span>
                       ) : (
                         <span className="text-muted-foreground font-mono">0</span>
                       )}
