@@ -83,7 +83,11 @@ export function SignupModal({ isOpen, onClose, planName, businessId, accentColor
 
     setIsSubmitting(true);
     try {
-      const response = await fetch(`${import.meta.env.BASE_URL}api/signup`, {
+      const signupUrl = businessId != null
+        ? `${import.meta.env.BASE_URL}api/businesses/${businessId}/signup`
+        : `${import.meta.env.BASE_URL}api/signup`;
+
+      const response = await fetch(signupUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -94,7 +98,6 @@ export function SignupModal({ isOpen, onClose, planName, businessId, accentColor
           googleListingUrl: form.googleListingUrl.trim() || undefined,
           yelpListingUrl: form.yelpListingUrl.trim() || undefined,
           planName: planName ?? undefined,
-          businessId: businessId ?? undefined,
         }),
       });
 

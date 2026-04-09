@@ -23,6 +23,6 @@ router.use("/", commentsRouter);
 router.use("/dashboard", dashboardRouter);
 router.use("/agent", agentsRouter);
 router.use("/sync", syncRouter);
-router.use("/", signupRouter);
+router.use("/businesses/:businessId/signup", signupRouter);
 
 export default router;

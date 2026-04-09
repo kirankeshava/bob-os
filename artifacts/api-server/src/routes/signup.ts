@@ -5,10 +5,27 @@ import { sendEmail, ensureInbox } from "../lib/agentmail";
 import { openai } from "@workspace/integrations-openai-ai-server";
 import { logger } from "../lib/logger";
 
-const router = Router();
+const router = Router({ mergeParams: true });
 
-router.post("/signup", async (req, res) => {
-  const { fullName, email, businessName, platforms, googleListingUrl, yelpListingUrl, planName, businessId } = req.body;
+// POST /businesses/:businessId/signup  — public signup for a business site visitor
+router.post("/", async (req, res) => {
+  const businessId = parseInt(req.params.businessId);
+  if (isNaN(businessId)) {
+    res.status(400).json({ error: "Invalid businessId" });
+    return;
+  }
+
+  // Verify the business has a public site (ensures businessId is a real, public site context)
+  const [site] = await db.select({ businessId: businessSitesTable.businessId, published: businessSitesTable.published })
+    .from(businessSitesTable)
+    .where(eq(businessSitesTable.businessId, businessId));
+
+  if (!site || !site.published) {
+    res.status(404).json({ error: "Business site not found" });
+    return;
+  }
+
+  const { fullName, email, businessName, platforms, googleListingUrl, yelpListingUrl, planName } = req.body;
 
   if (!fullName || !email || !businessName) {
     res.status(400).json({ error: "fullName, email, and businessName are required" });
@@ -30,20 +47,6 @@ router.post("/signup", async (req, res) => {
     return;
   }
 
-  // Validate businessId against a known public site to prevent cross-business abuse
-  let resolvedBizId: number | null = null;
-  if (businessId != null) {
-    const parsedId = parseInt(String(businessId));
-    if (!isNaN(parsedId)) {
-      const [site] = await db.select({ businessId: businessSitesTable.businessId })
-        .from(businessSitesTable)
-        .where(eq(businessSitesTable.businessId, parsedId));
-      if (site) {
-        resolvedBizId = parsedId;
-      }
-    }
-  }
-
   const [signup] = await db.insert(signupsTable).values({
     fullName,
     email,
@@ -52,21 +55,14 @@ router.post("/signup", async (req, res) => {
     googleListingUrl: googleListingUrl ?? null,
     yelpListingUrl: yelpListingUrl ?? null,
     planName: planName ?? null,
-    businessId: resolvedBizId != null ? String(resolvedBizId) : null,
+    businessId: String(businessId),
     onboardingTriggered: false,
   }).returning();
 
-  if (resolvedBizId == null) {
-    logger.warn({ signupId: signup.id }, "No valid businessId — signup saved without onboarding emails");
-    res.json({ success: true, signupId: signup.id, onboardingTriggered: false });
-    return;
-  }
-
   try {
-    const [business] = await db.select().from(businessesTable).where(eq(businessesTable.id, resolvedBizId));
+    const [business] = await db.select().from(businessesTable).where(eq(businessesTable.id, businessId));
     if (!business) {
-      logger.warn({ signupId: signup.id, resolvedBizId }, "Business not found — signup saved without onboarding emails");
-      res.json({ success: true, signupId: signup.id, onboardingTriggered: false });
+      res.status(404).json({ error: "Business not found" });
       return;
     }
 
@@ -74,13 +70,13 @@ router.post("/signup", async (req, res) => {
     let fromAddress = business.emailAddress;
 
     if (!inboxId) {
-      const [site] = await db.select().from(businessSitesTable).where(eq(businessSitesTable.businessId, resolvedBizId));
-      inboxId = site?.emailInboxId ?? null;
-      fromAddress = site?.emailAddress ?? null;
+      const [fullSite] = await db.select().from(businessSitesTable).where(eq(businessSitesTable.businessId, businessId));
+      inboxId = fullSite?.emailInboxId ?? null;
+      fromAddress = fullSite?.emailAddress ?? null;
     }
 
     if (!inboxId) {
-      const provisioned = await ensureInbox(resolvedBizId, business.name);
+      const provisioned = await ensureInbox(businessId, business.name);
       if (provisioned) {
         inboxId = provisioned.id;
         fromAddress = provisioned.emailAddress;
@@ -161,7 +157,6 @@ Respond with ONLY valid JSON array:
     for (const emailItem of generatedEmails) {
       const isImmediate = emailItem.delayDays === 0;
       const scheduledFor = isImmediate ? null : new Date(now.getTime() + emailItem.delayDays * 24 * 60 * 60 * 1000);
-
       let messageId: string | undefined;
       let threadId: string | undefined;
       let status = "pending";
@@ -177,7 +172,7 @@ Respond with ONLY valid JSON array:
       }
 
       await db.insert(outreachEmailsTable).values({
-        businessId: resolvedBizId,
+        businessId,
         inboxId,
         messageId: messageId ?? null,
         threadId: threadId ?? null,
