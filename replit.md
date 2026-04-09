@@ -63,18 +63,17 @@ pnpm workspace monorepo using TypeScript. Each package manages its own dependenc
 ## Database Schema (PostgreSQL via Drizzle)
 
 - `businesses` — Business opportunities with market data, TAM, revenue targets
-- `tasks` — Tasks per business with status (open/in_progress/waiting_approval/closed), agent type, priority (critical/high/medium/low)
-- `task_comments` — Comments on tasks from user, orchestrator, agents, CEO, or Executive Orchestrator
+- `tasks` — Tasks per business with status (open/in_progress/closed), agent type, priority
+- `task_comments` — Comments on tasks from user, orchestrator, or agents
 - `agent_runs` — Tracking AI agent executions (researcher, orchestrator)
 - `business_sites` — AI-generated website content per business (slug, hero, services, pricing, howItWorks, accentColor, AgentMail inbox)
 - `outreach_emails` — Log of emails sent/received via AgentMail per business
 - `skills` — Dynamic skills (SKILL.md packages from GitHub) with name, slug, source, content, status (active/disabled), businessId (null = global)
-- `ceo_reviews` — CEO operating assessments per business (mode, oneMetric, runwayStatus, topPriority, weeklyRevenueTarget, taskDirectives JSON)
 
 ## AI Integration
 
 - Provider: OpenAI via Replit AI Integrations (no API key required)
-- Model: gpt-5.2 for researcher, orchestrator, and CEO review agents; gpt-4.1-mini for auto-orchestrator decisions
+- Model: gpt-5.2 for both researcher and orchestrator agents
 - Researcher agent: Finds top 5 business ideas, saves to DB
 - Orchestrator agent: Creates 5-8 tasks per business with agent assignments
 
@@ -86,24 +85,5 @@ Dynamic skill acquisition from GitHub repositories (skills.sh ecosystem):
 - **Orchestrator suggestions**: When creating task plans, orchestrator checks installed skills and logs which ones will augment each task as comments
 - **Skills UI**: `/skills` page in Bob dashboard with installed skills list (toggle/remove) and GitHub search to discover/install new ones
 - Skills source from GitHub via `https://raw.githubusercontent.com/{source}/main/SKILL.md` or `master/SKILL.md`
-
-## Agent Architecture
-
-Bob OS uses a two-layer agent system:
-
-### CEO Layer (Bob)
-- Runs `ceoReviewTick()` every 5 minutes
-- Produces strategic assessment: mode (wartime/peacetime), runwayStatus (alive/at_risk/dead), oneMetric, topPriority
-- Sets `weeklyRevenueTarget` — concrete dollar milestone for the 7-day window
-- Produces `taskDirectives` — JSON array of `{taskId, priority, reason}` for task re-prioritization
-- Applies directives to DB immediately, posts CEO priority comment on each reprioritized task
-- Focuses on distribution → revenue → product fire hierarchy
-
-### Executive Orchestrator Layer
-- Runs `autoOrchestratorTick()` on every orchestrator tick (every 30s) when tasks are in `waiting_approval`
-- Uses AI to classify: is this a GENUINE financial spend (>$10 real money) or false alarm?
-- Non-financial blocks → auto-approved immediately, task resumes, orchestrator posts explanation comment
-- Genuine financial decisions → escalated to Bob with a comment flagging the amount
-- Prevents Bob from being a bottleneck on non-financial task approvals
 
 See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details.

@@ -1,5 +1,5 @@
 import { Link, useLocation } from "wouter";
-import { Activity, Briefcase, LayoutDashboard, Github, CheckCircle, AlertCircle, Loader2, Clock, BookOpen, Users } from "lucide-react";
+import { Activity, Briefcase, LayoutDashboard, Github, CheckCircle, AlertCircle, Loader2, Clock, BookOpen } from "lucide-react";
 import { ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 
@@ -81,7 +81,6 @@ export function Shell({ children }: { children: ReactNode }) {
 
   const navigation = [
     { name: "Mission Control", href: "/", icon: LayoutDashboard },
-    { name: "Customers", href: "/customers", icon: Users },
     { name: "Agent Runs", href: "/agent-runs", icon: Activity },
     { name: "Skills", href: "/skills", icon: BookOpen },
   ];
