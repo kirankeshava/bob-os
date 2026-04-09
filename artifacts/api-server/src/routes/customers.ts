@@ -1,10 +1,9 @@
 import { Router } from "express";
 import { eq, desc } from "drizzle-orm";
-import { db, customersTable, reviewsTable, dailyReportsTable } from "@workspace/db";
+import { db, customersTable } from "@workspace/db";
 import { getUncachableStripeClient } from "../lib/stripeClient";
 import { sendEmail, listInboxes } from "../lib/agentmail";
 import { logger } from "../lib/logger";
-import { seedReviewsForCustomer, scheduleReportEmailsForCustomer } from "../services/daily-report-scheduler";
 
 interface CreateCustomerBody {
   name?: string;
@@ -113,14 +112,6 @@ router.post("/", async (req, res) => {
     logger.error({ err, email }, "Welcome email failed")
   );
 
-  seedReviewsForCustomer(customer.id).catch(err =>
-    logger.error({ err, customerId: customer.id }, "Review seeding failed")
-  );
-
-  scheduleReportEmailsForCustomer(customer.id).catch(err =>
-    logger.error({ err, customerId: customer.id }, "Report scheduling failed")
-  );
-
   logger.info({ customerId: customer.id, email, businessName }, "New customer created");
   res.status(201).json(customer);
 });
@@ -171,62 +162,6 @@ router.patch("/:id/status", async (req, res) => {
     return;
   }
   res.json(updated);
-});
-
-router.post("/:id/reviews", async (req, res) => {
-  const id = parseInt(req.params.id);
-  if (isNaN(id)) { res.status(400).json({ error: "Invalid id" }); return; }
-
-  const [customer] = await db.select().from(customersTable).where(eq(customersTable.id, id));
-  if (!customer) { res.status(404).json({ error: "Not found" }); return; }
-
-  const reviews = req.body as Array<{
-    platform?: string;
-    rating: number;
-    authorName: string;
-    reviewText: string;
-    reviewDate?: string;
-  }>;
-
-  if (!Array.isArray(reviews) || reviews.length === 0) {
-    res.status(400).json({ error: "Body must be a non-empty array of reviews" });
-    return;
-  }
-
-  const inserted = await db.insert(reviewsTable).values(
-    reviews.map(r => ({
-      customerId: id,
-      platform: r.platform ?? "google",
-      rating: Math.min(5, Math.max(1, r.rating)),
-      authorName: r.authorName,
-      reviewText: r.reviewText,
-      reviewDate: r.reviewDate ? new Date(r.reviewDate) : new Date(),
-    }))
-  ).returning();
-
-  res.status(201).json({ count: inserted.length, reviews: inserted });
-});
-
-router.get("/:id/reviews", async (req, res) => {
-  const id = parseInt(req.params.id);
-  if (isNaN(id)) { res.status(400).json({ error: "Invalid id" }); return; }
-
-  const reviews = await db.select().from(reviewsTable)
-    .where(eq(reviewsTable.customerId, id))
-    .orderBy(desc(reviewsTable.reviewDate));
-
-  res.json(reviews);
-});
-
-router.get("/:id/reports", async (req, res) => {
-  const id = parseInt(req.params.id);
-  if (isNaN(id)) { res.status(400).json({ error: "Invalid id" }); return; }
-
-  const reports = await db.select().from(dailyReportsTable)
-    .where(eq(dailyReportsTable.customerId, id))
-    .orderBy(dailyReportsTable.dayNumber);
-
-  res.json(reports);
 });
 
 router.post("/:id/billing-portal", async (req, res) => {
