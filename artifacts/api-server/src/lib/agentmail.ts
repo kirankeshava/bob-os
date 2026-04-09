@@ -114,20 +114,45 @@ export async function listMessages(inboxId: string): Promise<AgentMailMessage[]>
     const response = await agentmailFetch(`/inboxes/${encodeURIComponent(inboxId)}/messages`, { method: "GET" });
     if (!response.ok) return [];
     const data = await response.json() as unknown;
-    const msgs = Array.isArray(data) ? data : ((data as Record<string, unknown>).messages as AgentMailMessage[] ?? []);
+    const msgs = Array.isArray(data) ? data : ((data as Record<string, unknown>).messages as unknown[] ?? []);
     return msgs.map((m: Record<string, unknown>) => ({
       id: String(m.message_id ?? m.id ?? ""),
       subject: String(m.subject ?? ""),
-      from: String(m.from ?? ""),
-      to: String(m.to ?? ""),
-      body: String(m.text ?? m.body ?? ""),
+      from: Array.isArray(m.from) ? m.from.join(", ") : String(m.from ?? ""),
+      to: Array.isArray(m.to) ? m.to.join(", ") : String(m.to ?? ""),
+      // List endpoint only has preview — use it as body snippet
+      body: String(m.text ?? m.body ?? m.preview ?? ""),
       threadId: m.thread_id ? String(m.thread_id) : undefined,
-      sentAt: m.sent_at ? String(m.sent_at) : undefined,
-      receivedAt: m.received_at ? String(m.received_at) : undefined,
+      sentAt: m.timestamp ? String(m.timestamp) : undefined,
+      receivedAt: m.timestamp ? String(m.timestamp) : undefined,
     }));
   } catch (err) {
     logger.error({ err }, "AgentMail listMessages error");
     return [];
+  }
+}
+
+export async function getMessage(inboxId: string, messageId: string): Promise<AgentMailMessage | null> {
+  try {
+    const response = await agentmailFetch(
+      `/inboxes/${encodeURIComponent(inboxId)}/messages/${encodeURIComponent(messageId)}`,
+      { method: "GET" }
+    );
+    if (!response.ok) return null;
+    const m = await response.json() as Record<string, unknown>;
+    return {
+      id: String(m.message_id ?? m.id ?? ""),
+      subject: String(m.subject ?? ""),
+      from: Array.isArray(m.from) ? m.from.join(", ") : String(m.from ?? ""),
+      to: Array.isArray(m.to) ? m.to.join(", ") : String(m.to ?? ""),
+      body: String(m.text ?? m.extracted_text ?? m.body ?? m.preview ?? ""),
+      threadId: m.thread_id ? String(m.thread_id) : undefined,
+      sentAt: m.timestamp ? String(m.timestamp) : undefined,
+      receivedAt: m.timestamp ? String(m.timestamp) : undefined,
+    };
+  } catch (err) {
+    logger.error({ err }, "AgentMail getMessage error");
+    return null;
   }
 }
 

@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { eq, desc, isNull, lt } from "drizzle-orm";
 import { db, businessesTable, businessSitesTable, outreachEmailsTable } from "@workspace/db";
-import { sendEmail, listMessages, listInboxes, ensureInbox } from "../lib/agentmail";
+import { sendEmail, listMessages, getMessage, listInboxes, ensureInbox } from "../lib/agentmail";
 import { openai } from "@workspace/integrations-openai-ai-server";
 import { logger } from "../lib/logger";
 
@@ -57,7 +57,7 @@ router.post("/send", async (req, res) => {
 
   const result = await sendEmail(inbox.inboxId, to, subject, body);
   if (!result) {
-    res.status(500).json({ error: "Failed to send email via AgentMail" });
+    res.status(503).json({ error: "Outbound email sending is not available on the current AgentMail plan. Inbox is receive-only." });
     return;
   }
 
@@ -192,7 +192,7 @@ Respond with ONLY valid JSON array:
   res.json({ success: true, sequenceCount: inserted.length, emails: inserted });
 });
 
-// GET /businesses/:businessId/inbox/log  — list logged sent emails
+// GET /businesses/:businessId/inbox/log  — list logged sent emails (must be before /:messageId)
 router.get("/log", async (req, res) => {
   const businessId = parseInt(req.params.businessId);
   if (isNaN(businessId)) { res.status(400).json({ error: "Invalid businessId" }); return; }
@@ -203,6 +203,20 @@ router.get("/log", async (req, res) => {
     .limit(100);
 
   res.json(emails);
+});
+
+// GET /businesses/:businessId/inbox/:messageId  — get full message body
+router.get("/:messageId", async (req, res) => {
+  const businessId = parseInt(req.params.businessId);
+  if (isNaN(businessId)) { res.status(400).json({ error: "Invalid businessId" }); return; }
+
+  const inbox = await getBusinessInbox(businessId);
+  if (!inbox) { res.status(404).json({ error: "No inbox for this business" }); return; }
+
+  const msg = await getMessage(inbox.inboxId, req.params.messageId);
+  if (!msg) { res.status(404).json({ error: "Message not found" }); return; }
+
+  res.json(msg);
 });
 
 export default router;
