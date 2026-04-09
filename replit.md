@@ -38,6 +38,10 @@ pnpm workspace monorepo using TypeScript. Each package manages its own dependenc
   - `/businesses/:id/performance` — Business performance metrics (financials, growth, feedback, competitors)
   - `/agent-runs` — Agent run monitor with live polling
   - `/sites/:id` — Public-facing business website (no admin chrome, AI-generated content)
+  - `/businesses/:id/artifacts` — Full sortable artifacts table for a business
+  - `/ceo` — CEO Command page with live plan, goals, milestones, and chat
+  - `/skills` — Dynamic skills management (install/toggle/remove from GitHub)
+  - `/customers` — Customer admin with reports panel, payment badges
 
 ### API Server (`artifacts/api-server`)
 - **Path**: `/api`
@@ -88,12 +92,26 @@ pnpm workspace monorepo using TypeScript. Each package manages its own dependenc
 - `skills` — Dynamic skills (SKILL.md packages from GitHub) with name, slug, source, content, status (active/disabled), businessId (null = global)
 - `ceo_reviews` — CEO operating assessments per business (mode, oneMetric, runwayStatus, topPriority, weeklyRevenueTarget, taskDirectives JSON)
 - `knowledge_base_entries` — Customer-specific knowledge base with entryType (file|url), sourceName, sourceUrl, rawText, status (processing|ready|error), errorMessage
-- `customers` — Customer signups with trial/subscription status, Stripe ID, review platform URLs, paymentMethod (stripe|paypal|zelle), paypalSubscriptionId
+- `signups` — Raw signup records with full_name, email, business_name, platforms, metadata (jsonb), paymentMethod, onboardingTriggered
+- `customers` — Customer signups with trial/subscription status, Stripe ID, review platform URLs, paymentMethod (stripe|paypal|zelle), paypalSubscriptionId, businessId, metadata (jsonb)
 - `reviews` — Customer reviews (platform, rating, author, text, date, AI-proposed reply text, respondedAt)
 - `daily_reports` — 7-day report schedule per customer (dayNumber 1-7, sentAt, emailMessageId, reportData JSON)
 - `business_performance` — Per-business performance metrics (income, monthlySpend, netBurnProfit, runwayDays, reached, signups, activeUsers, arpu, churnRate, npsScore, healthScore, topSources, notes)
 - `customer_feedback` — Customer feedback entries per business (source, text, sentiment, date)
 - `competitors` — Tracked competitors per business (name, strengths, weaknesses, pricing, notes)
+
+## Per-Business Onboarding Flows
+
+Each business has a tailored signup modal with fields specific to that service:
+- **Business 1 (AI Review Autopilot)**: Platforms (Google/Yelp checkboxes), conditional listing URLs
+- **Business 2 (No-Show Reducer)**: Industry select, scheduling software, business phone, monthly appointments, no-show rate
+- **Business 3 (AI Clip Factory)**: Content type, posting platforms (TikTok/Reels/Shorts etc.), content URL, episode length, clips/week
+- **Business 4 (Lead Response Copilot)**: Industry, lead sources (FB/Google Ads etc.), business phone, avg deal value, calendar URL
+- **Business 5 (Listing Optimizer)**: E-commerce platform (Etsy/Shopify), store URL, active listings, product category, monthly revenue
+
+Config: `artifacts/bob-dashboard/src/lib/onboarding-configs.ts`
+Modal: `artifacts/bob-dashboard/src/components/signup-modal.tsx` (dynamic, reads config by businessId)
+API: `artifacts/api-server/src/routes/signup.ts` (stores business-specific fields in `metadata` jsonb, generates tailored onboarding email sequences)
 
 ## Knowledge Base System
 
