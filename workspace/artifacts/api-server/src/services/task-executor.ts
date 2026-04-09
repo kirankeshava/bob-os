@@ -1,0 +1,404 @@
+import { eq, inArray } from "drizzle-orm";
+import { db, tasksTable, taskCommentsTable, businessesTable, businessArtifactsTable, businessSitesTable } from "@workspace/db";
+import { openai } from "@workspace/integrations-openai-ai-server";
+import { logger } from "../lib/logger";
+
+// ─── Constants ────────────────────────────────────────────────────────────────
+
+const MONITOR_INTERVAL_MS = 30_000;          // Orchestrator checks every 30s
+const TASK_WORK_INTERVAL_MS = 2.5 * 60_000; // Each task gets a new work cycle every 2.5 min
+const STALL_THRESHOLD_MS = 6 * 60_000;      // After 6 min with no update, task is considered stalled
+
+// ─── State ────────────────────────────────────────────────────────────────────
+
+// Tracks when each task was last dispatched for work (in-memory)
+const lastDispatched = new Map<number, number>();
+// Prevents a task from being dispatched while it's still being processed
+const inFlight = new Set<number>();
+// Tracks each task's status from the previous tick to detect transitions
+const previousStatuses = new Map<number, string>();
+// Tasks flagged for immediate dispatch (bypasses the cooldown timer)
+const immediateDispatch = new Set<number>();
+// Whether the orchestrator loop is running
+let orchestratorRunning = false;
+
+// ─── Agent names ──────────────────────────────────────────────────────────────
+
+const AGENT_NAMES: Record<string, string> = {
+  researcher: "Research Agent",
+  pm: "PM Agent",
+  marketer: "Marketing Agent",
+  developer: "Developer Agent",
+  qa: "QA Agent",
+  copywriter: "Copywriter Agent",
+  sales: "Sales Agent",
+  orchestrator: "Orchestrator",
+};
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+interface TaskArtifact {
+  title: string;
+  content: string;
+  artifactType: "document" | "template" | "research" | "script" | "plan" | "copy" | "code" | "spreadsheet";
+}
+
+interface TaskProgress {
+  completedItems: string[];
+  currentAction: string;
+  pendingItems: string[];
+  recommendation: "continue" | "complete" | "needs_approval";
+  approvalReason?: string;
+  progressSummary: string;
+  artifact?: TaskArtifact;
+}
+
+// ─── Task Execution ───────────────────────────────────────────────────────────
+
+async function executeTask(
+  task: typeof tasksTable.$inferSelect,
+  businessName: string,
+  businessDescription: string,
+  siteUrl?: string | null,
+  contactEmail?: string | null,
+) {
+  const recentComments = await db
+    .select()
+    .from(taskCommentsTable)
+    .where(eq(taskCommentsTable.taskId, task.id))
+    .orderBy(taskCommentsTable.createdAt)
+    .limit(8);
+
+  const commentHistory = recentComments
+    .map(c => `[${c.author}]: ${c.content}`)
+    .join("\n");
+
+  const agentName = task.agentType ? (AGENT_NAMES[task.agentType] ?? `${task.agentType} Agent`) : "AI Agent";
+  const cycleCount = recentComments.length;
+
+  const systemPrompt = `You are ${agentName}, an autonomous AI agent working on a business task to reach $100k revenue in 30 days.
+
+You are an ADVISOR and PLANNER only. You CANNOT spend money, create accounts, or take real-world actions. The human owner must approve and execute anything that costs money or requires signing up to external services.
+
+Make real, concrete progress on planning and content creation. Report what you did.
+
+Respond with ONLY valid JSON:
+{
+  "completedItems": ["Specific thing done 1", "Specific thing done 2"],
+  "currentAction": "What you are actively doing right now",
+  "pendingItems": ["Next concrete step 1", "Next step 2"],
+  "recommendation": "continue" | "complete" | "needs_approval",
+  "approvalReason": "Only if needs_approval: exactly what decision is needed from the human — include exact dollar amount, what platform, what for, and cheaper alternatives",
+  "progressSummary": "2-3 sentence summary of what was accomplished this cycle",
+  "artifact": {
+    "title": "Title of the document/deliverable",
+    "content": "Full content of the document — write the actual text, not a placeholder. Minimum 200 words.",
+    "artifactType": "document" | "template" | "research" | "script" | "plan" | "copy" | "code" | "spreadsheet"
+  }
+}
+
+## FINANCIAL SAFEGUARDS — NON-NEGOTIABLE:
+1. NEVER spend, commit, transfer, or allocate any money without requesting "needs_approval" first.
+2. ANY time a task requires spending money, set recommendation="needs_approval" and explain EXACTLY: what the expense is, how much ($), what platform, what cheaper alternatives exist.
+3. ALWAYS prefer free/zero-cost approaches first. Only recommend paid options if free options are exhausted.
+4. If you need access to a bank account, credit card, or payment method — ALWAYS set needs_approval. You do not have access to any financial accounts.
+5. NEVER assume funds are authorized. Each spend requires its own explicit approval from the owner.
+
+## ACCOUNT CREATION SAFEGUARDS — NON-NEGOTIABLE:
+1. NEVER create accounts on any platform (Fiverr, Upwork, LinkedIn, Facebook Ads, Google Ads, Stripe, etc.) without "needs_approval".
+2. When an account is needed, explain: what platform, why it's needed, what the owner needs to provide, and whether a free tier exists.
+3. Prepare all profile content/copy for the owner to paste in themselves.
+
+## WHAT YOU CAN DO WITHOUT APPROVAL (just decide and continue):
+- Research, strategy, planning, writing, creating scripts/templates/documents
+- Choosing niche, audience, pricing, channels, positioning, business name, tagline
+- Drafting email copy, gig descriptions, landing page text, pricing structures, SOPs
+- Recommending tools or platforms to the owner
+- Any research, planning, or content task
+
+## ARTIFACT RULES:
+- Include an artifact ONLY when you have produced actual deliverable content
+- Write the artifact fully — no placeholders or "I would write..."
+- Omit the "artifact" key if no tangible deliverable was produced this cycle
+- Good examples: email outreach script, Fiverr gig description (ready to paste), pricing spreadsheet, landing page copy, market research, SOP, social media calendar
+
+## STATUS RULES:
+- "complete": all deliverables fully done, ready for owner to execute
+- "needs_approval": ONLY for (1) spending real money or (2) creating an account on an external platform. NOTHING ELSE.
+- "continue": still working — use this for ALL non-financial decisions`;
+
+  const businessAssets = [
+    siteUrl ? `Business Website URL: ${siteUrl} (share this URL with customers to prove legitimacy)` : null,
+    contactEmail ? `Business Contact Email: ${contactEmail} (AgentMail inbox — agents can send/receive email here)` : null,
+  ].filter(Boolean).join("\n");
+
+  const userMessage = `Business: ${businessName}
+Description: ${businessDescription}
+${businessAssets ? `\nBusiness Assets:\n${businessAssets}\n` : ""}
+Task: ${task.title}
+Description: ${task.description}
+Deliverable: ${task.deliverables || "See description"}
+Agent Type: ${task.agentType} | Priority: ${task.priority}
+
+Previous activity (${cycleCount} cycles so far):
+${commentHistory || "No previous activity — this is cycle 1. Start fresh."}
+
+Push forward. If your task involves outreach or customer communication — reference the website URL and email in any templates. If your task involves creating written content, scripts, research, plans or code — write the actual content as an artifact now.`;
+
+  const response = await openai.chat.completions.create({
+    model: "gpt-5.2",
+    max_completion_tokens: 4096,
+    messages: [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userMessage },
+    ],
+  });
+
+  const content = response.choices[0]?.message?.content ?? "{}";
+  let progress: TaskProgress;
+
+  try {
+    const jsonMatch = content.match(/\{[\s\S]*\}/);
+    progress = jsonMatch ? JSON.parse(jsonMatch[0]) : null;
+    if (!progress?.progressSummary) throw new Error("Invalid progress format");
+  } catch (e) {
+    logger.warn({ taskId: task.id, error: e }, "Failed to parse task progress JSON");
+    progress = {
+      completedItems: [],
+      currentAction: "Working on task",
+      pendingItems: [],
+      recommendation: "continue",
+      progressSummary: content.slice(0, 500),
+    };
+  }
+
+  const commentLines: string[] = [];
+  if (progress.completedItems?.length > 0) {
+    commentLines.push("**Completed this cycle:**");
+    progress.completedItems.forEach(item => commentLines.push(`✅ ${item}`));
+    commentLines.push("");
+  }
+  if (progress.currentAction) {
+    commentLines.push(`**Currently:** ${progress.currentAction}`);
+  }
+  if (progress.pendingItems?.length > 0) {
+    commentLines.push("");
+    commentLines.push("**Up next:**");
+    progress.pendingItems.forEach(item => commentLines.push(`⏳ ${item}`));
+  }
+  if (progress.artifact) {
+    commentLines.push("");
+    commentLines.push(`**📎 Created artifact:** ${progress.artifact.title}`);
+  }
+  if (progress.recommendation === "needs_approval" && progress.approvalReason) {
+    commentLines.push("");
+    commentLines.push(`**⚠️ Needs your approval:** ${progress.approvalReason}`);
+  }
+  commentLines.push("");
+  commentLines.push(`_${progress.progressSummary}_`);
+
+  await db.insert(taskCommentsTable).values({
+    taskId: task.id,
+    author: agentName,
+    agentType: task.agentType ?? "agent",
+    content: commentLines.join("\n"),
+  });
+
+  if (progress.artifact?.title && progress.artifact?.content) {
+    await db.insert(businessArtifactsTable).values({
+      businessId: task.businessId,
+      taskId: task.id,
+      title: progress.artifact.title,
+      content: progress.artifact.content,
+      artifactType: progress.artifact.artifactType ?? "document",
+      agentType: task.agentType,
+      createdBy: agentName,
+    });
+    logger.info({ taskId: task.id, artifactTitle: progress.artifact.title }, "Artifact created");
+  }
+
+  const newStatus = progress.recommendation === "complete"
+    ? "closed"
+    : progress.recommendation === "needs_approval"
+    ? "waiting_approval"
+    : "in_progress";
+
+  await db
+    .update(tasksTable)
+    .set({ status: newStatus, lastProgressUpdate: new Date(), updatedAt: new Date() })
+    .where(eq(tasksTable.id, task.id));
+
+  logger.info({ taskId: task.id, recommendation: progress.recommendation, newStatus }, "Task cycle complete");
+  return progress;
+}
+
+// ─── Orchestrator Monitor Tick ────────────────────────────────────────────────
+
+async function orchestratorTick() {
+  try {
+    const allTasks = await db.select().from(tasksTable);
+    const now = Date.now();
+
+    const inProgressTasks = allTasks.filter(t => t.status === "in_progress");
+    const waitingTasks = allTasks.filter(t => t.status === "waiting_approval");
+    const openTasks = allTasks.filter(t => t.status === "open");
+    const closedTasks = allTasks.filter(t => t.status === "closed");
+
+    logger.info(
+      { inProgress: inProgressTasks.length, waiting: waitingTasks.length, open: openTasks.length, closed: closedTasks.length },
+      "Orchestrator tick"
+    );
+
+    if (inProgressTasks.length === 0 && waitingTasks.length > 0) {
+      logger.warn({ count: waitingTasks.length }, "Orchestrator: all tasks blocked on approval — waiting for owner");
+    }
+
+    // Load businesses for context
+    const businessIds = [...new Set(allTasks.map(t => t.businessId))];
+    const businesses = businessIds.length > 0
+      ? await db.select().from(businessesTable).where(inArray(businessesTable.id, businessIds))
+      : [];
+    const bizMap = new Map(businesses.map(b => [b.id, b]));
+
+    const sites = businessIds.length > 0
+      ? await db.select().from(businessSitesTable).where(inArray(businessSitesTable.businessId, businessIds))
+      : [];
+    const siteMap = new Map(sites.map(s => [s.businessId, s]));
+
+    // Detect tasks that just transitioned into in_progress — clear their cooldown
+    // so they get dispatched immediately instead of waiting 2.5 minutes.
+    for (const task of inProgressTasks) {
+      const prev = previousStatuses.get(task.id);
+      const justBecameActive = prev === "waiting_approval" || prev === "open" || prev === undefined;
+      if (justBecameActive) {
+        lastDispatched.delete(task.id);
+        immediateDispatch.add(task.id);
+        logger.info({ taskId: task.id, from: prev ?? "unknown" }, "Orchestrator: task ready — dispatching immediately");
+      }
+    }
+
+    // Dispatch work for in_progress tasks that are ready for a new cycle
+    const toDispatch = inProgressTasks.filter(task => {
+      if (inFlight.has(task.id)) return false;
+      if (immediateDispatch.has(task.id)) return true;   // always dispatch immediately
+      const lastRun = lastDispatched.get(task.id) ?? 0;
+      return (now - lastRun) >= TASK_WORK_INTERVAL_MS;
+    });
+
+    if (toDispatch.length > 0) {
+      logger.info({ count: toDispatch.length, taskIds: toDispatch.map(t => t.id) }, "Orchestrator: dispatching work");
+    }
+
+    // Detect stalled tasks (in_progress but no update in a long time)
+    for (const task of inProgressTasks) {
+      if (!task.lastProgressUpdate) continue;
+      const stalledMs = now - new Date(task.lastProgressUpdate).getTime();
+      if (stalledMs > STALL_THRESHOLD_MS && !inFlight.has(task.id)) {
+        const lastRun = lastDispatched.get(task.id) ?? 0;
+        // Force re-dispatch even if interval hasn't passed
+        if (now - lastRun > TASK_WORK_INTERVAL_MS) {
+          logger.warn({ taskId: task.id, stalledMs }, "Orchestrator: stalled task detected, re-dispatching");
+          await db.insert(taskCommentsTable).values({
+            taskId: task.id,
+            author: "Orchestrator",
+            agentType: "orchestrator",
+            content: `**🔄 Orchestrator override:** Task stalled for ${Math.round(stalledMs / 60000)} minutes. Re-dispatching agent to continue work.`,
+          });
+        }
+      }
+    }
+
+    // Run task work concurrently (but cap at 3 parallel to avoid rate limits)
+    const chunks: (typeof toDispatch)[] = [];
+    for (let i = 0; i < toDispatch.length; i += 3) chunks.push(toDispatch.slice(i, i + 3));
+
+    for (const chunk of chunks) {
+      await Promise.all(chunk.map(async task => {
+        const biz = bizMap.get(task.businessId);
+        if (!biz) return;
+
+        inFlight.add(task.id);
+        lastDispatched.set(task.id, now);
+        immediateDispatch.delete(task.id);  // clear the bypass flag once dispatched
+
+        const site = siteMap.get(task.businessId);
+        const baseUrl = process.env.REPLIT_DEV_DOMAIN
+          ? `https://${process.env.REPLIT_DEV_DOMAIN}/sites/${task.businessId}`
+          : null;
+        const siteUrl = site ? baseUrl : null;
+        const contactEmail = site?.contactEmail ?? site?.emailAddress ?? null;
+
+        try {
+          await executeTask(task, biz.name, biz.description, siteUrl, contactEmail);
+        } catch (err) {
+          logger.error({ taskId: task.id, err }, "Orchestrator: task execution failed");
+          await db.insert(taskCommentsTable).values({
+            taskId: task.id,
+            author: "Orchestrator",
+            agentType: "orchestrator",
+            content: `**⚠️ Orchestrator error:** Agent cycle failed. Will retry on next check. Error: ${err instanceof Error ? err.message : String(err)}`,
+          });
+        } finally {
+          inFlight.delete(task.id);
+        }
+      }));
+    }
+    // Update previousStatuses at end of tick so next tick can detect transitions
+    for (const task of allTasks) {
+      previousStatuses.set(task.id, task.status);
+    }
+  } catch (err) {
+    logger.error({ err }, "Orchestrator tick failed");
+  }
+}
+
+// ─── Continuous Loop ──────────────────────────────────────────────────────────
+
+async function runOrchestratorLoop() {
+  logger.info({ monitorIntervalMs: MONITOR_INTERVAL_MS, workIntervalMs: TASK_WORK_INTERVAL_MS }, "Orchestrator: continuous loop started");
+
+  while (orchestratorRunning) {
+    await orchestratorTick();
+    // Wait 30 seconds before next check
+    await new Promise(resolve => setTimeout(resolve, MONITOR_INTERVAL_MS));
+  }
+
+  logger.info("Orchestrator: loop stopped");
+}
+
+// ─── Public API ───────────────────────────────────────────────────────────────
+
+export async function triggerExecutionCycle() {
+  return orchestratorTick();
+}
+
+/**
+ * Flag a specific task for immediate dispatch on the next tick.
+ * Call this from routes that change a task to in_progress (e.g. approval grants).
+ * Also schedules a tick right away so the agent starts within ~1s, not up to 30s later.
+ */
+export function dispatchTaskNow(taskId: number) {
+  immediateDispatch.add(taskId);
+  lastDispatched.delete(taskId);
+  // Fire an extra tick immediately without waiting for the 30s interval
+  setImmediate(() => {
+    orchestratorTick().catch(err => logger.error({ err, taskId }, "Immediate dispatch tick failed"));
+  });
+  logger.info({ taskId }, "Orchestrator: immediate dispatch requested");
+}
+
+export function startTaskExecutor() {
+  if (orchestratorRunning) {
+    logger.warn("Orchestrator already running — ignoring duplicate start");
+    return;
+  }
+  orchestratorRunning = true;
+  runOrchestratorLoop().catch(err => {
+    logger.error({ err }, "Orchestrator loop crashed — restarting in 10s");
+    orchestratorRunning = false;
+    setTimeout(() => {
+      orchestratorRunning = true;
+      runOrchestratorLoop().catch(() => {});
+    }, 10_000);
+  });
+}

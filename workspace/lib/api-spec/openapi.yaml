@@ -1,0 +1,1159 @@
+openapi: 3.1.0
+info:
+  # Do not change the title, if the title changes, the import paths will be broken
+  title: Api
+  version: 0.1.0
+  description: Bob - Entrepreneur Agent API
+servers:
+  - url: /api
+    description: Base API path
+tags:
+  - name: sync
+    description: GitHub auto-sync status
+  - name: health
+    description: Health operations
+  - name: businesses
+    description: Business opportunities management
+  - name: tasks
+    description: Task management for business projects
+  - name: comments
+    description: Task comments and feedback
+  - name: agents
+    description: AI Agent operations
+paths:
+  /sync/status:
+    get:
+      operationId: getSyncStatus
+      tags: [sync]
+      summary: Get GitHub sync status
+      description: Returns the status of the last GitHub auto-sync run
+      responses:
+        "200":
+          description: Sync status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SyncStatus"
+
+  /healthz:
+    get:
+      operationId: healthCheck
+      tags: [health]
+      summary: Health check
+      description: Returns server health status
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+
+  /businesses:
+    get:
+      operationId: listBusinesses
+      tags: [businesses]
+      summary: List all business opportunities
+      responses:
+        "200":
+          description: List of businesses
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Business"
+    post:
+      operationId: createBusiness
+      tags: [businesses]
+      summary: Create a new business opportunity
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateBusinessBody"
+      responses:
+        "201":
+          description: Created business
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Business"
+
+  /businesses/{id}:
+    get:
+      operationId: getBusiness
+      tags: [businesses]
+      summary: Get a business by ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Business details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Business"
+        "404":
+          description: Not found
+    patch:
+      operationId: updateBusiness
+      tags: [businesses]
+      summary: Update a business
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateBusinessBody"
+      responses:
+        "200":
+          description: Updated business
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Business"
+    delete:
+      operationId: deleteBusiness
+      tags: [businesses]
+      summary: Delete a business
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Deleted
+
+  /businesses/{id}/tasks:
+    get:
+      operationId: listBusinessTasks
+      tags: [tasks]
+      summary: List tasks for a business
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: List of tasks
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Task"
+    post:
+      operationId: createTask
+      tags: [tasks]
+      summary: Create a task for a business
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTaskBody"
+      responses:
+        "201":
+          description: Created task
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Task"
+
+  /tasks/{id}:
+    get:
+      operationId: getTask
+      tags: [tasks]
+      summary: Get a task by ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Task details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Task"
+    patch:
+      operationId: updateTask
+      tags: [tasks]
+      summary: Update a task (status, details, etc.)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateTaskBody"
+      responses:
+        "200":
+          description: Updated task
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Task"
+    delete:
+      operationId: deleteTask
+      tags: [tasks]
+      summary: Delete a task
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Deleted
+
+  /tasks/{id}/comments:
+    get:
+      operationId: listTaskComments
+      tags: [comments]
+      summary: List comments for a task
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: List of comments
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TaskComment"
+    post:
+      operationId: createTaskComment
+      tags: [comments]
+      summary: Add a comment to a task
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTaskCommentBody"
+      responses:
+        "201":
+          description: Created comment
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TaskComment"
+
+  /businesses/{businessId}/site:
+    get:
+      operationId: getBusinessSite
+      tags: [businesses]
+      summary: Get business site configuration
+      parameters:
+        - name: businessId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Business site
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BusinessSite"
+        "404":
+          description: Not found
+
+  /businesses/{businessId}/site/public:
+    get:
+      operationId: getBusinessSitePublic
+      tags: [businesses]
+      summary: Get public site data (business + site + artifacts)
+      parameters:
+        - name: businessId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Public site data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BusinessSitePublic"
+        "404":
+          description: Not found
+
+  /businesses/{businessId}/site/generate:
+    post:
+      operationId: generateBusinessSite
+      tags: [businesses]
+      summary: Generate or regenerate site content using AI and create AgentMail inbox
+      parameters:
+        - name: businessId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Generated site
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BusinessSite"
+        "404":
+          description: Business not found
+
+  /businesses/{businessId}/inbox:
+    get:
+      operationId: getBusinessInbox
+      tags: [businesses]
+      summary: Get AgentMail inbox messages and log for a business
+      parameters:
+        - name: businessId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Inbox data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BusinessInbox"
+
+  /businesses/{businessId}/inbox/send:
+    post:
+      operationId: sendBusinessEmail
+      tags: [businesses]
+      summary: Send an outreach email from the business inbox
+      parameters:
+        - name: businessId
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SendEmailBody"
+      responses:
+        "200":
+          description: Email sent
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  messageId:
+                    type: string
+                required:
+                  - success
+                  - messageId
+
+  /businesses/{businessId}/inbox/log:
+    get:
+      operationId: getEmailLog
+      tags: [businesses]
+      summary: Get logged outreach emails for a business
+      parameters:
+        - name: businessId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Email log
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/OutreachEmail"
+
+  /businesses/{businessId}/artifacts:
+    get:
+      operationId: listBusinessArtifacts
+      tags: [businesses]
+      summary: List all artifacts for a business
+      parameters:
+        - name: businessId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: List of artifacts
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/BusinessArtifact"
+
+  /dashboard/agent-activity:
+    get:
+      operationId: getAgentActivity
+      tags: [businesses]
+      summary: Get all active agents grouped by business
+      responses:
+        "200":
+          description: Active agent operations per business
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/BusinessAgentActivity"
+
+  /dashboard/summary:
+    get:
+      operationId: getDashboardSummary
+      tags: [businesses]
+      summary: Get high-level dashboard summary
+      responses:
+        "200":
+          description: Dashboard summary stats
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DashboardSummary"
+
+  /agent/research:
+    post:
+      operationId: triggerResearch
+      tags: [agents]
+      summary: Trigger the AI research agent to find business ideas
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TriggerResearchBody"
+      responses:
+        "200":
+          description: Research triggered, returns run ID
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentRunStatus"
+
+  /agent/orchestrate/{businessId}:
+    post:
+      operationId: triggerOrchestrate
+      tags: [agents]
+      summary: Trigger the orchestrator agent to plan/update tasks for a business
+      parameters:
+        - name: businessId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Orchestration triggered
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentRunStatus"
+
+  /agent/runs:
+    get:
+      operationId: listAgentRuns
+      tags: [agents]
+      summary: List recent agent runs
+      responses:
+        "200":
+          description: List of agent runs
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AgentRun"
+
+  /agent/runs/{id}:
+    get:
+      operationId: getAgentRun
+      tags: [agents]
+      summary: Get status of a specific agent run
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Agent run details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentRun"
+
+components:
+  schemas:
+    BusinessArtifact:
+      type: object
+      properties:
+        id:
+          type: integer
+        businessId:
+          type: integer
+        taskId:
+          type: ["integer", "null"]
+        title:
+          type: string
+        content:
+          type: string
+        artifactType:
+          type: string
+          enum: [document, template, research, script, plan, copy, code, spreadsheet]
+        agentType:
+          type: ["string", "null"]
+        createdBy:
+          type: ["string", "null"]
+        createdAt:
+          type: string
+        updatedAt:
+          type: string
+      required:
+        - id
+        - businessId
+        - taskId
+        - title
+        - content
+        - artifactType
+        - agentType
+        - createdBy
+        - createdAt
+        - updatedAt
+
+    AgentTaskInfo:
+      type: object
+      properties:
+        taskId:
+          type: integer
+        title:
+          type: string
+        agentType:
+          type: ["string", "null"]
+        assignedAgent:
+          type: ["string", "null"]
+        status:
+          type: string
+        priority:
+          type: string
+        updatedAt:
+          type: string
+      required:
+        - taskId
+        - title
+        - agentType
+        - assignedAgent
+        - status
+        - priority
+        - updatedAt
+
+    BusinessAgentActivity:
+      type: object
+      properties:
+        businessId:
+          type: integer
+        businessName:
+          type: string
+        businessStatus:
+          type: string
+        activeTasks:
+          type: array
+          items:
+            $ref: "#/components/schemas/AgentTaskInfo"
+        totalTasks:
+          type: integer
+        openCount:
+          type: integer
+        inProgressCount:
+          type: integer
+        closedCount:
+          type: integer
+      required:
+        - businessId
+        - businessName
+        - businessStatus
+        - activeTasks
+        - totalTasks
+        - openCount
+        - inProgressCount
+        - closedCount
+
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+      required:
+        - status
+
+    Business:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        description:
+          type: string
+        marketSize:
+          type: string
+        tam:
+          type: string
+        investmentNeeded:
+          type: string
+        targetRevenue30d:
+          type: string
+        effortLevel:
+          type: string
+          enum: [low, medium, high]
+        platform:
+          type: string
+        status:
+          type: string
+          enum: [researching, planning, active, completed, paused]
+        rank:
+          type: integer
+        costBenefitScore:
+          type: ["number", "null"]
+        marketDemandScore:
+          type: ["number", "null"]
+        agentNotes:
+          type: ["string", "null"]
+        createdAt:
+          type: string
+        updatedAt:
+          type: string
+      required:
+        - id
+        - name
+        - description
+        - marketSize
+        - tam
+        - investmentNeeded
+        - targetRevenue30d
+        - effortLevel
+        - platform
+        - status
+        - rank
+        - costBenefitScore
+        - marketDemandScore
+        - agentNotes
+        - createdAt
+        - updatedAt
+
+    CreateBusinessBody:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        marketSize:
+          type: string
+        tam:
+          type: string
+        investmentNeeded:
+          type: string
+        targetRevenue30d:
+          type: string
+        effortLevel:
+          type: string
+          enum: [low, medium, high]
+        platform:
+          type: string
+        rank:
+          type: integer
+        costBenefitScore:
+          type: ["number", "null"]
+        marketDemandScore:
+          type: ["number", "null"]
+        agentNotes:
+          type: ["string", "null"]
+      required:
+        - name
+        - description
+        - marketSize
+        - tam
+        - investmentNeeded
+        - targetRevenue30d
+        - effortLevel
+        - platform
+        - rank
+
+    UpdateBusinessBody:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        marketSize:
+          type: string
+        tam:
+          type: string
+        investmentNeeded:
+          type: string
+        targetRevenue30d:
+          type: string
+        effortLevel:
+          type: string
+          enum: [low, medium, high]
+        platform:
+          type: string
+        status:
+          type: string
+          enum: [researching, planning, active, completed, paused]
+        rank:
+          type: integer
+        costBenefitScore:
+          type: ["number", "null"]
+        marketDemandScore:
+          type: ["number", "null"]
+        agentNotes:
+          type: ["string", "null"]
+
+    Task:
+      type: object
+      properties:
+        id:
+          type: integer
+        businessId:
+          type: integer
+        title:
+          type: string
+        description:
+          type: string
+        status:
+          type: string
+          enum: [open, in_progress, closed, waiting_approval]
+        assignedAgent:
+          type: ["string", "null"]
+        agentType:
+          type: ["string", "null"]
+        priority:
+          type: string
+          enum: [low, medium, high, critical]
+        estimatedHours:
+          type: ["number", "null"]
+        deliverables:
+          type: ["string", "null"]
+        dueDate:
+          type: ["string", "null"]
+        lastProgressUpdate:
+          type: ["string", "null"]
+        createdAt:
+          type: string
+        updatedAt:
+          type: string
+      required:
+        - id
+        - businessId
+        - title
+        - description
+        - status
+        - assignedAgent
+        - agentType
+        - priority
+        - estimatedHours
+        - deliverables
+        - dueDate
+        - createdAt
+        - updatedAt
+
+    CreateTaskBody:
+      type: object
+      properties:
+        title:
+          type: string
+        description:
+          type: string
+        status:
+          type: string
+          enum: [open, in_progress, closed, waiting_approval]
+        assignedAgent:
+          type: ["string", "null"]
+        agentType:
+          type: ["string", "null"]
+        priority:
+          type: string
+          enum: [low, medium, high, critical]
+        estimatedHours:
+          type: ["number", "null"]
+        deliverables:
+          type: ["string", "null"]
+        dueDate:
+          type: ["string", "null"]
+      required:
+        - title
+        - description
+        - priority
+
+    UpdateTaskBody:
+      type: object
+      properties:
+        title:
+          type: string
+        description:
+          type: string
+        status:
+          type: string
+          enum: [open, in_progress, closed, waiting_approval]
+        assignedAgent:
+          type: ["string", "null"]
+        agentType:
+          type: ["string", "null"]
+        priority:
+          type: string
+          enum: [low, medium, high, critical]
+        estimatedHours:
+          type: ["number", "null"]
+        deliverables:
+          type: ["string", "null"]
+        dueDate:
+          type: ["string", "null"]
+
+    TaskComment:
+      type: object
+      properties:
+        id:
+          type: integer
+        taskId:
+          type: integer
+        author:
+          type: string
+          enum: [user, orchestrator, agent]
+        content:
+          type: string
+        agentType:
+          type: ["string", "null"]
+        createdAt:
+          type: string
+      required:
+        - id
+        - taskId
+        - author
+        - content
+        - agentType
+        - createdAt
+
+    CreateTaskCommentBody:
+      type: object
+      properties:
+        author:
+          type: string
+          enum: [user, orchestrator, agent]
+        content:
+          type: string
+        agentType:
+          type: ["string", "null"]
+      required:
+        - author
+        - content
+
+    DashboardSummary:
+      type: object
+      properties:
+        totalBudget:
+          type: number
+        totalRevenuePotential:
+          type: string
+        activeBusinesses:
+          type: integer
+        totalTasks:
+          type: integer
+        openTasks:
+          type: integer
+        inProgressTasks:
+          type: integer
+        closedTasks:
+          type: integer
+        activeAgentRuns:
+          type: integer
+        daysRemaining:
+          type: integer
+      required:
+        - totalBudget
+        - totalRevenuePotential
+        - activeBusinesses
+        - totalTasks
+        - openTasks
+        - inProgressTasks
+        - closedTasks
+        - activeAgentRuns
+        - daysRemaining
+
+    TriggerResearchBody:
+      type: object
+      properties:
+        prompt:
+          type: ["string", "null"]
+      required: []
+
+    AgentRunStatus:
+      type: object
+      properties:
+        runId:
+          type: integer
+        status:
+          type: string
+      required:
+        - runId
+        - status
+
+    AgentRun:
+      type: object
+      properties:
+        id:
+          type: integer
+        agentType:
+          type: string
+        status:
+          type: string
+          enum: [pending, running, completed, failed]
+        businessId:
+          type: ["integer", "null"]
+        log:
+          type: ["string", "null"]
+        result:
+          type: ["string", "null"]
+        createdAt:
+          type: string
+        updatedAt:
+          type: string
+      required:
+        - id
+        - agentType
+        - status
+        - businessId
+        - log
+        - result
+        - createdAt
+        - updatedAt
+
+    BusinessSite:
+      type: object
+      properties:
+        id:
+          type: integer
+        businessId:
+          type: integer
+        slug:
+          type: string
+        tagline:
+          type: ["string", "null"]
+        heroTitle:
+          type: ["string", "null"]
+        heroSubtitle:
+          type: ["string", "null"]
+        services:
+          type: ["array", "null"]
+          items:
+            type: object
+        pricing:
+          type: ["array", "null"]
+          items:
+            type: object
+        howItWorks:
+          type: ["array", "null"]
+          items:
+            type: object
+        accentColor:
+          type: ["string", "null"]
+        emailInboxId:
+          type: ["string", "null"]
+        emailAddress:
+          type: ["string", "null"]
+        contactEmail:
+          type: ["string", "null"]
+        published:
+          type: boolean
+        generatedAt:
+          type: ["string", "null"]
+        createdAt:
+          type: string
+        updatedAt:
+          type: string
+      required:
+        - id
+        - businessId
+        - slug
+        - published
+        - createdAt
+        - updatedAt
+
+    BusinessSitePublic:
+      type: object
+      properties:
+        business:
+          $ref: "#/components/schemas/Business"
+        site:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/BusinessSite"
+        artifacts:
+          type: array
+          items:
+            $ref: "#/components/schemas/BusinessArtifact"
+      required:
+        - business
+        - artifacts
+
+    BusinessInbox:
+      type: object
+      properties:
+        inboxId:
+          type: string
+        emailAddress:
+          type: ["string", "null"]
+        messages:
+          type: array
+          items:
+            type: object
+        logged:
+          type: array
+          items:
+            $ref: "#/components/schemas/OutreachEmail"
+      required:
+        - inboxId
+        - messages
+        - logged
+
+    OutreachEmail:
+      type: object
+      properties:
+        id:
+          type: integer
+        businessId:
+          type: integer
+        inboxId:
+          type: string
+        messageId:
+          type: ["string", "null"]
+        threadId:
+          type: ["string", "null"]
+        direction:
+          type: string
+        toAddress:
+          type: ["string", "null"]
+        fromAddress:
+          type: ["string", "null"]
+        subject:
+          type: ["string", "null"]
+        body:
+          type: ["string", "null"]
+        status:
+          type: string
+        agentType:
+          type: ["string", "null"]
+        sentAt:
+          type: ["string", "null"]
+        createdAt:
+          type: string
+        updatedAt:
+          type: string
+      required:
+        - id
+        - businessId
+        - inboxId
+        - direction
+        - status
+        - createdAt
+        - updatedAt
+
+    SyncStatus:
+      type: object
+      properties:
+        lastSyncAt:
+          type: ["string", "null"]
+        status:
+          type: string
+          enum: [idle, syncing, success, error, skipped]
+        commitUrl:
+          type: ["string", "null"]
+        commitMessage:
+          type: ["string", "null"]
+        artifactsCount:
+          type: integer
+        sourceFilesCount:
+          type: integer
+        errorMessage:
+          type: ["string", "null"]
+      required:
+        - lastSyncAt
+        - status
+        - commitUrl
+        - commitMessage
+        - artifactsCount
+        - sourceFilesCount
+        - errorMessage
+
+    SendEmailBody:
+      type: object
+      properties:
+        to:
+          type: string
+        subject:
+          type: string
+        body:
+          type: string
+        agentType:
+          type: ["string", "null"]
+      required:
+        - to
+        - subject
+        - body

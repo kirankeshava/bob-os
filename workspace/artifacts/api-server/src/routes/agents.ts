@@ -1,0 +1,303 @@
+import { Router } from "express";
+import { eq, desc } from "drizzle-orm";
+import { db, agentRunsTable, businessesTable, tasksTable, taskCommentsTable } from "@workspace/db";
+import { openai } from "@workspace/integrations-openai-ai-server";
+import { GetAgentRunParams, TriggerOrchestrateParams } from "@workspace/api-zod";
+import { logger } from "../lib/logger";
+import { triggerExecutionCycle } from "../services/task-executor";
+
+const router = Router();
+
+async function runResearchAgent(runId: number, prompt?: string | null) {
+  await db
+    .update(agentRunsTable)
+    .set({ status: "running", log: "Researcher agents starting...\n", updatedAt: new Date() })
+    .where(eq(agentRunsTable.id, runId));
+
+  const systemPrompt = `You are Bob, an expert entrepreneur AI agent. Your goal is to research and identify the top 5 most profitable business ideas that can be started with $1000 and scaled to $100,000 revenue within 30 days.
+
+Focus on:
+- Freelance services on Fiverr, Upwork, Facebook, Craigslist
+- Content creation on YouTube, TikTok
+- Digital products and services
+- AI-powered services
+- Quick-turnaround opportunities
+
+For each business, provide a detailed JSON analysis. Respond with ONLY a JSON array of exactly 5 business objects with this structure:
+{
+  "name": "Business name",
+  "description": "2-3 sentence description",
+  "marketSize": "$X billion",
+  "tam": "$X million (serviceable)",
+  "investmentNeeded": "$X",
+  "targetRevenue30d": "$X,XXX",
+  "effortLevel": "low|medium|high",
+  "platform": "Fiverr, Upwork, YouTube, etc.",
+  "rank": 1,
+  "costBenefitScore": 8.5,
+  "marketDemandScore": 9.0,
+  "agentNotes": "Key insights and strategy from the research agent"
+}`;
+
+  const userMessage = prompt || "Find the top 5 most profitable business opportunities I can start today with $1000 and grow to $100k in 30 days. Focus on opportunities with the fastest time-to-revenue.";
+
+  let log = "Researcher agents starting...\n";
+  log += "Searching for business opportunities...\n";
+
+  await db
+    .update(agentRunsTable)
+    .set({ log, updatedAt: new Date() })
+    .where(eq(agentRunsTable.id, runId));
+
+  const response = await openai.chat.completions.create({
+    model: "gpt-5.2",
+    max_completion_tokens: 8192,
+    messages: [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userMessage },
+    ],
+  });
+
+  const content = response.choices[0]?.message?.content ?? "[]";
+  log += "Analysis complete. Parsing results...\n";
+
+  let businesses: Record<string, unknown>[] = [];
+  try {
+    const jsonMatch = content.match(/\[[\s\S]*\]/);
+    if (jsonMatch) {
+      businesses = JSON.parse(jsonMatch[0]);
+    }
+  } catch (e) {
+    log += `Failed to parse businesses: ${e}\n`;
+    await db
+      .update(agentRunsTable)
+      .set({ status: "failed", log, result: content, updatedAt: new Date() })
+      .where(eq(agentRunsTable.id, runId));
+    return;
+  }
+
+  log += `Found ${businesses.length} business opportunities. Saving to database...\n`;
+
+  for (const biz of businesses) {
+    await db.insert(businessesTable).values({
+      name: String(biz.name),
+      description: String(biz.description),
+      marketSize: String(biz.marketSize),
+      tam: String(biz.tam),
+      investmentNeeded: String(biz.investmentNeeded),
+      targetRevenue30d: String(biz.targetRevenue30d),
+      effortLevel: String(biz.effortLevel) as "low" | "medium" | "high",
+      platform: String(biz.platform),
+      rank: Number(biz.rank),
+      costBenefitScore: Number(biz.costBenefitScore),
+      marketDemandScore: Number(biz.marketDemandScore),
+      agentNotes: String(biz.agentNotes),
+      status: "planning",
+    });
+    log += `Created business: ${biz.name}\n`;
+  }
+
+  await db
+    .update(agentRunsTable)
+    .set({ status: "completed", log, result: content, updatedAt: new Date() })
+    .where(eq(agentRunsTable.id, runId));
+}
+
+async function runOrchestratorAgent(runId: number, businessId: number) {
+  const [business] = await db
+    .select()
+    .from(businessesTable)
+    .where(eq(businessesTable.id, businessId));
+
+  if (!business) {
+    await db
+      .update(agentRunsTable)
+      .set({ status: "failed", log: "Business not found", updatedAt: new Date() })
+      .where(eq(agentRunsTable.id, runId));
+    return;
+  }
+
+  await db
+    .update(agentRunsTable)
+    .set({ status: "running", log: `Orchestrator starting for: ${business.name}\n`, updatedAt: new Date() })
+    .where(eq(agentRunsTable.id, runId));
+
+  const existingTasks = await db
+    .select()
+    .from(tasksTable)
+    .where(eq(tasksTable.businessId, businessId));
+
+  const systemPrompt = `You are an expert Orchestrator AI agent managing a business project. Create a detailed task breakdown for this business to achieve its revenue target in 30 days.
+
+Return ONLY a JSON array of task objects with this structure:
+{
+  "title": "Task title",
+  "description": "Detailed description of what needs to be done",
+  "agentType": "researcher|pm|marketer|developer|qa|copywriter|sales",
+  "priority": "low|medium|high|critical",
+  "estimatedHours": 4,
+  "deliverables": "What will be delivered when this task is done",
+  "status": "open"
+}
+
+Create 5-8 actionable tasks across different agent types. Focus on tasks that directly drive revenue.`;
+
+  const existingTaskList = existingTasks.map((t) => `- ${t.title} (${t.status})`).join("\n");
+
+  const response = await openai.chat.completions.create({
+    model: "gpt-5.2",
+    max_completion_tokens: 8192,
+    messages: [
+      { role: "system", content: systemPrompt },
+      {
+        role: "user",
+        content: `Business: ${business.name}
+Description: ${business.description}
+Platform: ${business.platform}
+Target Revenue (30 days): ${business.targetRevenue30d}
+Investment Available: ${business.investmentNeeded}
+Agent Notes: ${business.agentNotes || "None"}
+
+Existing tasks:
+${existingTaskList || "None yet"}
+
+Create a comprehensive task plan to achieve the revenue target.`,
+      },
+    ],
+  });
+
+  const content = response.choices[0]?.message?.content ?? "[]";
+  let log = `Orchestrator starting for: ${business.name}\nGenerating task plan...\n`;
+
+  let tasks: Record<string, unknown>[] = [];
+  try {
+    const jsonMatch = content.match(/\[[\s\S]*\]/);
+    if (jsonMatch) {
+      tasks = JSON.parse(jsonMatch[0]);
+    }
+  } catch (e) {
+    log += `Failed to parse tasks: ${e}\n`;
+    await db
+      .update(agentRunsTable)
+      .set({ status: "failed", log, result: content, updatedAt: new Date() })
+      .where(eq(agentRunsTable.id, runId));
+    return;
+  }
+
+  log += `Creating ${tasks.length} tasks...\n`;
+
+  for (const task of tasks) {
+    const [newTask] = await db
+      .insert(tasksTable)
+      .values({
+        businessId,
+        title: String(task.title),
+        description: String(task.description),
+        agentType: String(task.agentType),
+        assignedAgent: `${String(task.agentType).charAt(0).toUpperCase() + String(task.agentType).slice(1)} Agent`,
+        priority: String(task.priority) as "low" | "medium" | "high" | "critical",
+        estimatedHours: task.estimatedHours ? Number(task.estimatedHours) : null,
+        deliverables: task.deliverables ? String(task.deliverables) : null,
+        status: "open",
+      })
+      .returning();
+
+    await db.insert(taskCommentsTable).values({
+      taskId: newTask.id,
+      author: "orchestrator",
+      agentType: "orchestrator",
+      content: `Task created by Orchestrator Agent. Priority: ${task.priority}. Deliverable: ${task.deliverables || "See description"}`,
+    });
+
+    log += `Created task: ${task.title}\n`;
+  }
+
+  await db
+    .update(businessesTable)
+    .set({ status: "active", updatedAt: new Date() })
+    .where(eq(businessesTable.id, businessId));
+
+  await db
+    .update(agentRunsTable)
+    .set({ status: "completed", log, result: content, updatedAt: new Date() })
+    .where(eq(agentRunsTable.id, runId));
+}
+
+router.post("/research", async (req, res) => {
+  const { prompt } = req.body;
+  const [run] = await db
+    .insert(agentRunsTable)
+    .values({ agentType: "researcher", status: "pending", log: "Research queued...", businessId: null })
+    .returning();
+
+  res.json({ runId: run.id, status: "pending" });
+
+  runResearchAgent(run.id, prompt).catch((err) => {
+    logger.error({ err }, "Research agent failed");
+    db.update(agentRunsTable)
+      .set({ status: "failed", log: `Error: ${err.message}`, updatedAt: new Date() })
+      .where(eq(agentRunsTable.id, run.id))
+      .catch(() => {});
+  });
+});
+
+router.post("/orchestrate/:businessId", async (req, res) => {
+  const parsed = TriggerOrchestrateParams.safeParse({ businessId: Number(req.params.businessId) });
+  if (!parsed.success) {
+    res.status(400).json({ error: "Invalid businessId" });
+    return;
+  }
+
+  const [run] = await db
+    .insert(agentRunsTable)
+    .values({
+      agentType: "orchestrator",
+      status: "pending",
+      log: "Orchestration queued...",
+      businessId: parsed.data.businessId,
+    })
+    .returning();
+
+  res.json({ runId: run.id, status: "pending" });
+
+  runOrchestratorAgent(run.id, parsed.data.businessId).catch((err) => {
+    logger.error({ err }, "Orchestrator agent failed");
+    db.update(agentRunsTable)
+      .set({ status: "failed", log: `Error: ${err.message}`, updatedAt: new Date() })
+      .where(eq(agentRunsTable.id, run.id))
+      .catch(() => {});
+  });
+});
+
+router.post("/execute-tasks", async (_req, res) => {
+  res.json({ message: "Task execution cycle triggered" });
+  triggerExecutionCycle().catch(err => logger.error({ err }, "Manual execution cycle failed"));
+});
+
+router.get("/runs", async (_req, res) => {
+  const runs = await db
+    .select()
+    .from(agentRunsTable)
+    .orderBy(desc(agentRunsTable.createdAt))
+    .limit(50);
+  res.json(runs);
+});
+
+router.get("/runs/:id", async (req, res) => {
+  const parsed = GetAgentRunParams.safeParse({ id: Number(req.params.id) });
+  if (!parsed.success) {
+    res.status(400).json({ error: "Invalid id" });
+    return;
+  }
+  const [run] = await db
+    .select()
+    .from(agentRunsTable)
+    .where(eq(agentRunsTable.id, parsed.data.id));
+  if (!run) {
+    res.status(404).json({ error: "Not found" });
+    return;
+  }
+  res.json(run);
+});
+
+export default router;

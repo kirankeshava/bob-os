@@ -1,0 +1,74 @@
+# Workspace
+
+## Overview
+
+pnpm workspace monorepo using TypeScript. Each package manages its own dependencies.
+
+## Stack
+
+- **Monorepo tool**: pnpm workspaces
+- **Node.js version**: 24
+- **Package manager**: pnpm
+- **TypeScript version**: 5.9
+- **API framework**: Express 5
+- **Database**: PostgreSQL + Drizzle ORM
+- **Validation**: Zod (`zod/v4`), `drizzle-zod`
+- **API codegen**: Orval (from OpenAPI spec)
+- **Build**: esbuild (CJS bundle)
+- **AI**: OpenAI via Replit AI Integrations (gpt-5.2)
+
+## Key Commands
+
+- `pnpm run typecheck` — full typecheck across all packages
+- `pnpm run build` — typecheck + build all packages
+- `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from OpenAPI spec
+- `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
+- `pnpm --filter @workspace/api-server run dev` — run API server locally
+
+## Artifacts
+
+### Bob - Entrepreneur Agent (`artifacts/bob-dashboard`)
+- **Path**: `/`
+- **Type**: react-vite
+- **Description**: "BOB_OS" — Entrepreneur AI agent mission control. Starts with $1000, targets $100k in 30 days.
+- **Pages**:
+  - `/` — Mission Control dashboard with capital trajectory, 5 business cards, summary stats, agent runs
+  - `/businesses/:id` — Business detail + Kanban board + Website & Inbox panel
+  - `/businesses/:id/tasks/:taskId` — Task detail with comment thread
+  - `/agent-runs` — Agent run monitor with live polling
+  - `/sites/:id` — Public-facing business website (no admin chrome, AI-generated content)
+
+### API Server (`artifacts/api-server`)
+- **Path**: `/api`
+- **Type**: Express 5 REST API
+- **Routes**:
+  - `GET/POST /businesses` — CRUD for business opportunities
+  - `GET/POST/PATCH/DELETE /businesses/:id` — Business management
+  - `GET/POST /businesses/:id/tasks` — Task management per business
+  - `GET/PATCH/DELETE /tasks/:id` — Task CRUD
+  - `GET/POST /tasks/:id/comments` — Task comments and feedback
+  - `GET /dashboard/summary` — High-level stats
+  - `POST /agent/research` — Trigger AI researcher agent (gpt-5.2)
+  - `POST /agent/orchestrate/:businessId` — Trigger AI orchestrator agent
+  - `GET /agent/runs` — List all agent runs
+  - `GET /agent/runs/:id` — Get run status
+  - `GET/POST /businesses/:id/site` — Business website CRUD + GET /site/public + POST /site/generate (AI)
+  - `GET/POST /businesses/:id/inbox` — AgentMail inbox messages + send email + email log
+
+## Database Schema (PostgreSQL via Drizzle)
+
+- `businesses` — Business opportunities with market data, TAM, revenue targets
+- `tasks` — Tasks per business with status (open/in_progress/closed), agent type, priority
+- `task_comments` — Comments on tasks from user, orchestrator, or agents
+- `agent_runs` — Tracking AI agent executions (researcher, orchestrator)
+- `business_sites` — AI-generated website content per business (slug, hero, services, pricing, howItWorks, accentColor, AgentMail inbox)
+- `outreach_emails` — Log of emails sent/received via AgentMail per business
+
+## AI Integration
+
+- Provider: OpenAI via Replit AI Integrations (no API key required)
+- Model: gpt-5.2 for both researcher and orchestrator agents
+- Researcher agent: Finds top 5 business ideas, saves to DB
+- Orchestrator agent: Creates 5-8 tasks per business with agent assignments
+
+See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details.
