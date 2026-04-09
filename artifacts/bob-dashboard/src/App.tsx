@@ -9,6 +9,7 @@ import TaskDetail from "@/pages/task-detail";
 import AgentRuns from "@/pages/agent-runs";
 import BusinessSitePage from "@/pages/business-site";
 import NotFound from "@/pages/not-found";
+import { PasswordGate } from "@/components/password-gate";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -31,15 +32,17 @@ function Router() {
   }
 
   return (
-    <Shell>
-      <Switch>
-        <Route path="/" component={Dashboard} />
-        <Route path="/businesses/:id" component={BusinessDetail} />
-        <Route path="/businesses/:id/tasks/:taskId" component={TaskDetail} />
-        <Route path="/agent-runs" component={AgentRuns} />
-        <Route component={NotFound} />
-      </Switch>
-    </Shell>
+    <PasswordGate>
+      <Shell>
+        <Switch>
+          <Route path="/" component={Dashboard} />
+          <Route path="/businesses/:id" component={BusinessDetail} />
+          <Route path="/businesses/:id/tasks/:taskId" component={TaskDetail} />
+          <Route path="/agent-runs" component={AgentRuns} />
+          <Route component={NotFound} />
+        </Switch>
+      </Shell>
+    </PasswordGate>
   );
 }
 

@@ -157,35 +157,92 @@ export default function TaskDetail() {
                 <div className="p-8 flex justify-center"><Loader2 className="h-6 w-6 animate-spin text-primary/50" /></div>
               ) : comments && comments.length > 0 ? (
                 <div className="p-4 space-y-4" data-testid="comment-thread">
-                  {comments.map((comment) => (
-                    <div key={comment.id} className={`flex gap-3 ${comment.author === 'user' ? 'flex-row-reverse' : ''}`}>
-                      <div className={`mt-1 h-8 w-8 rounded-full flex items-center justify-center flex-shrink-0 ${
-                        comment.author === 'user' ? 'bg-primary/20 text-primary border border-primary/30' : 
-                        comment.author === 'orchestrator' ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30' :
-                        'bg-purple-500/20 text-purple-400 border border-purple-500/30'
-                      }`}>
-                        {comment.author === 'user' ? <User className="h-4 w-4" /> : 
-                         comment.author === 'orchestrator' ? <Cpu className="h-4 w-4" /> :
-                         <Bot className="h-4 w-4" />}
-                      </div>
-                      <div className={`flex flex-col max-w-[80%] ${comment.author === 'user' ? 'items-end' : 'items-start'}`}>
-                        <div className="flex items-baseline gap-2 mb-1">
-                          <span className="text-xs font-mono font-medium text-muted-foreground capitalize">
-                            {comment.author === 'agent' ? (comment.agentType || 'Agent') : comment.author}
-                          </span>
-                          <span className="text-[10px] text-muted-foreground/50 font-mono">
-                            {new Date(comment.createdAt).toLocaleTimeString()}
-                          </span>
-                        </div>
-                        <div className={`p-3 rounded-lg text-sm whitespace-pre-wrap ${
-                          comment.author === 'user' ? 'bg-primary text-primary-foreground rounded-tr-none' : 
-                          'bg-muted/50 border border-border/50 text-foreground rounded-tl-none'
+                  {(() => {
+                    const sorted = [...comments].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+                    const latestAI = sorted.find(c => c.author === 'orchestrator' || c.author === 'agent');
+                    const rest = latestAI ? sorted.filter(c => c.id !== latestAI.id) : sorted;
+
+                    const parseSections = (content: string) => {
+                      const fields = ['Ask', 'Operation', 'Cost Impact', 'Benefit'];
+                      const result: Record<string, string> = {};
+                      for (const field of fields) {
+                        const regex = new RegExp(`\\*\\*${field}\\*\\*[:\\s]*([^\\n]+)`, 'i');
+                        const match = content.match(regex);
+                        if (match) result[field] = match[1].trim();
+                      }
+                      return Object.keys(result).length > 0 ? result : null;
+                    };
+
+                    const CommentBubble = ({ comment }: { comment: typeof comments[0] }) => (
+                      <div key={comment.id} className={`flex gap-3 ${comment.author === 'user' ? 'flex-row-reverse' : ''}`}>
+                        <div className={`mt-1 h-8 w-8 rounded-full flex items-center justify-center flex-shrink-0 ${
+                          comment.author === 'user' ? 'bg-primary/20 text-primary border border-primary/30' : 
+                          comment.author === 'orchestrator' ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30' :
+                          'bg-purple-500/20 text-purple-400 border border-purple-500/30'
                         }`}>
-                          {comment.content}
+                          {comment.author === 'user' ? <User className="h-4 w-4" /> : 
+                           comment.author === 'orchestrator' ? <Cpu className="h-4 w-4" /> :
+                           <Bot className="h-4 w-4" />}
+                        </div>
+                        <div className={`flex flex-col max-w-[80%] ${comment.author === 'user' ? 'items-end' : 'items-start'}`}>
+                          <div className="flex items-baseline gap-2 mb-1">
+                            <span className="text-xs font-mono font-medium text-muted-foreground capitalize">
+                              {comment.author === 'agent' ? (comment.agentType || 'Agent') : comment.author}
+                            </span>
+                            <span className="text-[10px] text-muted-foreground/50 font-mono">
+                              {new Date(comment.createdAt).toLocaleTimeString()}
+                            </span>
+                          </div>
+                          <div className={`p-3 rounded-lg text-sm whitespace-pre-wrap ${
+                            comment.author === 'user' ? 'bg-primary text-primary-foreground rounded-tr-none' : 
+                            'bg-muted/50 border border-border/50 text-foreground rounded-tl-none'
+                          }`}>
+                            {comment.content}
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+
+                    return (
+                      <>
+                        {latestAI && (() => {
+                          const sections = parseSections(latestAI.content);
+                          const authorLabel = latestAI.author === 'agent' ? (latestAI.agentType || 'Agent') : latestAI.author;
+                          const isOrchestrator = latestAI.author === 'orchestrator';
+                          const accentClass = isOrchestrator ? 'border-blue-500/50 bg-blue-500/5' : 'border-purple-500/50 bg-purple-500/5';
+                          const iconClass = isOrchestrator ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30' : 'bg-purple-500/20 text-purple-400 border border-purple-500/30';
+
+                          return (
+                            <div className={`rounded-lg border-2 p-4 ${accentClass}`} data-testid="summary-card">
+                              <div className="flex items-center gap-2 mb-3">
+                                <div className={`h-7 w-7 rounded-full flex items-center justify-center flex-shrink-0 ${iconClass}`}>
+                                  {isOrchestrator ? <Cpu className="h-3.5 w-3.5" /> : <Bot className="h-3.5 w-3.5" />}
+                                </div>
+                                <span className="text-xs font-mono font-semibold uppercase tracking-wide text-muted-foreground capitalize">{authorLabel}</span>
+                                <span className="text-[10px] text-muted-foreground/50 font-mono ml-auto">{new Date(latestAI.createdAt).toLocaleTimeString()}</span>
+                                <span className="text-[9px] font-mono uppercase tracking-widest text-primary/70 border border-primary/30 rounded px-1 py-0.5">Latest Update</span>
+                              </div>
+                              {sections ? (
+                                <dl className="space-y-2">
+                                  {(['Ask', 'Operation', 'Cost Impact', 'Benefit'] as const).filter(k => sections[k]).map(key => (
+                                    <div key={key} className="flex gap-2 text-sm">
+                                      <dt className="font-mono font-semibold text-muted-foreground min-w-[90px] shrink-0 text-xs uppercase pt-0.5">{key}</dt>
+                                      <dd className="text-foreground leading-relaxed">{sections[key]}</dd>
+                                    </div>
+                                  ))}
+                                </dl>
+                              ) : (
+                                <p className="text-sm whitespace-pre-wrap text-foreground leading-relaxed">{latestAI.content}</p>
+                              )}
+                            </div>
+                          );
+                        })()}
+                        {rest.map((comment) => (
+                          <CommentBubble key={comment.id} comment={comment} />
+                        ))}
+                      </>
+                    );
+                  })()}
                 </div>
               ) : (
                 <div className="p-12 text-center text-muted-foreground font-mono text-sm uppercase">

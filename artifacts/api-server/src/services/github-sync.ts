@@ -21,6 +21,7 @@ const SKIP_DIRS = new Set([
   ".config",
   ".replit-artifact",
   "attached_assets",
+  "generated",
 ]);
 
 const SKIP_EXTENSIONS = new Set([".map", ".log"]);
@@ -238,6 +239,13 @@ async function runSync() {
   const repo = process.env.GITHUB_SYNC_REPO;
   if (!repo) {
     logger.warn("GitHub sync disabled — set GITHUB_SYNC_REPO=owner/repo");
+    return;
+  }
+
+  if (!/^[^/]+\/[^/]+$/.test(repo)) {
+    const msg = `GITHUB_SYNC_REPO="${repo}" is not in owner/repo format`;
+    logger.error(msg);
+    syncStatus = { ...syncStatus, status: "error", lastSyncAt: new Date().toISOString(), errorMessage: msg };
     return;
   }
 
