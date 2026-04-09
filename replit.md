@@ -42,6 +42,7 @@ pnpm workspace monorepo using TypeScript. Each package manages its own dependenc
   - `/ceo` — CEO Command page with live plan, goals, milestones, and chat
   - `/skills` — Dynamic skills management (install/toggle/remove from GitHub)
   - `/customers` — Customer admin with reports panel, payment badges
+  - `/owner` — Owner Command Center with action items, project health, agent roster, portfolio metrics
 
 ### API Server (`artifacts/api-server`)
 - **Path**: `/api`

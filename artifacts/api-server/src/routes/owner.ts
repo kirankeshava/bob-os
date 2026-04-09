@@ -369,7 +369,36 @@ router.get("/dashboard", async (_req, res) => {
 
   res.json({
     ownerActionItems,
-    waitingApprovalItems: ownerActionItems.filter((i) => i.category === "payment_approval" || i.category === "approval"),
+    waitingApprovalItems: waitingTasks.map((task) => {
+      const business = businesses.find((b) => b.id === task.businessId);
+      const latestComment = latestCommentsByTask.get(task.id) ?? null;
+      const waitMs = now - new Date(task.updatedAt).getTime();
+      const waitMins = Math.floor(waitMs / 60000);
+      const taskText = `${task.title} ${task.description ?? ""}`.toLowerCase();
+      const isPayment = /\$[\d,]+|budget|spend|payment|fund|invest|cost|fee|money/.test(taskText);
+
+      let urgency: "critical" | "high" | "medium" | "low" = "low";
+      if (waitMins >= 60 * 24) urgency = "critical";
+      else if (waitMins >= 60 * 4) urgency = "high";
+      else if (waitMins >= 60) urgency = "medium";
+
+      return {
+        taskId: task.id,
+        businessId: task.businessId,
+        businessName: business?.name ?? "Unknown",
+        title: task.title,
+        agentType: task.agentType ?? "agent",
+        assignedAgent: task.assignedAgent ?? null,
+        priority: task.priority,
+        waitMins,
+        urgency,
+        actionNeeded: isPayment ? `Approve spend: ${task.title}` : `Review & approve: ${task.title}`,
+        whyBlocked: isPayment ? "Requires financial authorization" : "Requires owner decision",
+        valueAdd: `Unblocks progress on ${business?.name ?? "this project"}`,
+        latestCommentContent: latestComment?.content ?? null,
+        updatedAt: task.updatedAt.toISOString(),
+      };
+    }),
     projectHealth,
     agentRoster,
     portfolioMetrics: {
