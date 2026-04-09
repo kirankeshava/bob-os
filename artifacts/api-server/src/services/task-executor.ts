@@ -1,9 +1,10 @@
-import { eq, inArray, and } from "drizzle-orm";
-import { db, tasksTable, taskCommentsTable, businessesTable, businessArtifactsTable, businessSitesTable, outreachEmailsTable, skillsTable, knowledgeBaseEntriesTable } from "@workspace/db";
+import { eq, inArray, and, desc } from "drizzle-orm";
+import { db, tasksTable, taskCommentsTable, businessesTable, businessArtifactsTable, businessSitesTable, outreachEmailsTable, skillsTable, ceoReviewsTable } from "@workspace/db";
 import { openai } from "@workspace/integrations-openai-ai-server";
 import { listMessages, sendEmail } from "../lib/agentmail";
 import { sendScheduledEmails } from "../routes/email";
 import { logger } from "../lib/logger";
+import { CEO_SKILL_SUMMARY } from "../lib/ceo-skill";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -12,6 +13,7 @@ const TASK_WORK_INTERVAL_MS = 2.5 * 60_000; // Each task gets a new work cycle e
 const STALL_THRESHOLD_MS = 6 * 60_000;      // After 6 min with no update, task is considered stalled
 const INBOX_CHECK_INTERVAL_MS = 5 * 60_000; // Check inboxes every 5 min
 const SCHEDULED_EMAIL_INTERVAL_MS = 60 * 60_000; // Send scheduled emails every hour
+const CEO_REVIEW_INTERVAL_MS = 5 * 60_000;  // CEO review runs every 5 minutes
 
 // ─── State ────────────────────────────────────────────────────────────────────
 
@@ -29,6 +31,8 @@ let orchestratorRunning = false;
 let lastInboxCheckAt = 0;
 // Timestamp of last scheduled email send
 let lastScheduledEmailAt = 0;
+// Timestamp of last CEO review run
+let lastCeoReviewAt = 0;
 
 // ─── Agent names ──────────────────────────────────────────────────────────────
 
@@ -93,50 +97,6 @@ async function getRelevantSkillsForTask(taskTitle: string, agentType: string | n
   }
 }
 
-// ─── Knowledge Base Context ───────────────────────────────────────────────────
-
-async function getKnowledgeBaseContext(businessId: number, query: string): Promise<string> {
-  try {
-    const entries = await db
-      .select()
-      .from(knowledgeBaseEntriesTable)
-      .where(eq(knowledgeBaseEntriesTable.businessId, businessId));
-
-    const readyEntries = entries.filter(e => e.status === "ready" && e.rawText);
-    if (readyEntries.length === 0) return "";
-
-    const queryWords = query.toLowerCase().split(/\W+/).filter(w => w.length > 3);
-
-    const scored = readyEntries.map(entry => {
-      const text = entry.rawText.toLowerCase();
-      const score = queryWords.reduce((acc, word) => {
-        const matches = (text.match(new RegExp(word, "g")) ?? []).length;
-        return acc + matches;
-      }, 0);
-      return { entry, score };
-    });
-
-    scored.sort((a, b) => b.score - a.score);
-
-    const top3 = scored.slice(0, 3);
-    const TOKEN_BUDGET = 1500;
-    const chunks: string[] = [];
-    let totalLen = 0;
-
-    for (const { entry } of top3) {
-      const chunk = `[${entry.sourceName}]:\n${entry.rawText.slice(0, 1000)}`;
-      if (totalLen + chunk.length > TOKEN_BUDGET * 4) break;
-      chunks.push(chunk);
-      totalLen += chunk.length;
-    }
-
-    return chunks.join("\n\n---\n\n");
-  } catch (err) {
-    logger.warn({ err }, "Failed to load knowledge base context");
-    return "";
-  }
-}
-
 // ─── Task Execution ───────────────────────────────────────────────────────────
 
 async function executeTask(
@@ -165,6 +125,17 @@ async function executeTask(
   const systemPrompt = `You are ${agentName}, an autonomous AI agent working on a business task to reach $100k revenue in 30 days.
 
 You have been granted authority to create accounts and sign up to platforms on behalf of the business. The only thing requiring human approval is spending real money.
+
+## CEO OPERATING PRIORITIES (Apply Every Cycle)
+You are not just a task executor — you are an agent operating with CEO-level discipline.
+Prioritize your actions in this order every single cycle:
+1. **DISTRIBUTION first** — Can customers find and reach this business? If not, fix that before anything else.
+2. **PRODUCT second** — Does the core offer work? Is it 10x better than doing nothing?
+3. **REVENUE third** — Are we getting paid? Even $1 of revenue beats $0.
+Fight fires in this hierarchy. Let everything else burn.
+
+When executing any task, ask: "Does this action move our one key metric — revenue or path to revenue?" If no, deprioritize it.
+Flag immediately if this business looks **default dead** (no revenue path, burning resources with no customers).
 
 ## IDENTITY — USE THESE CREDENTIALS FOR ALL SIGNUPS:
 - Name: Bob
@@ -406,8 +377,6 @@ async function monitorInboxes() {
             .map(a => `[${a.artifactType}] ${a.title}: ${a.content.slice(0, 200)}`)
             .join("\n");
 
-          const kbContext = await getKnowledgeBaseContext(business.id, `${msg.subject ?? ""} ${msg.body ?? ""}`);
-
           const replyPrompt = `You are representing "${business.name}" and received the following email. Write a professional, friendly reply.
 
 Business: ${business.name}
@@ -419,7 +388,6 @@ Body: ${msg.body}
 
 Recent work context:
 ${artifactSummary || "None"}
-${kbContext ? `\nKnowledge base context:\n${kbContext}` : ""}
 
 Write a concise, helpful reply (100-150 words). Be professional but warm. Sign off as "${business.name} Team".
 Reply with ONLY the email body text — no subject line, no metadata.`;
@@ -467,6 +435,288 @@ Reply with ONLY the email body text — no subject line, no metadata.`;
   }
 }
 
+// ─── Auto-Orchestrator Tick ───────────────────────────────────────────────────
+
+async function autoOrchestratorTick() {
+  try {
+    const waitingTasks = await db.select().from(tasksTable).where(eq(tasksTable.status, "waiting_approval"));
+    if (waitingTasks.length === 0) return;
+
+    logger.info({ count: waitingTasks.length }, "Auto-orchestrator: reviewing blocked tasks");
+
+    for (const task of waitingTasks) {
+      try {
+        // Get the latest comment (contains approval reason from agent)
+        const comments = await db
+          .select()
+          .from(taskCommentsTable)
+          .where(eq(taskCommentsTable.taskId, task.id))
+          .orderBy(desc(taskCommentsTable.createdAt))
+          .limit(5);
+
+        const approvalComment = comments.find(c =>
+          c.content.toLowerCase().includes("approval") ||
+          c.content.toLowerCase().includes("needs_approval") ||
+          c.content.toLowerCase().includes("waiting")
+        );
+        const latestContext = comments.slice(0, 3).map(c => c.content.slice(0, 200)).join("\n---\n");
+
+        const prompt = `You are the Executive Orchestrator Agent. Your job is to classify whether a task genuinely requires HUMAN financial approval, or if it was incorrectly blocked and can be auto-approved.
+
+## Task
+Title: ${task.title}
+Description: ${task.description?.slice(0, 300) ?? ""}
+Agent Type: ${task.agentType ?? "unknown"}
+
+## Approval Context (recent agent comments)
+${latestContext || approvalComment?.content?.slice(0, 300) || "No context available"}
+
+---
+
+## Decision Rules
+Requires HUMAN approval (isFinancial = true):
+- Spending real money: ad spend, hiring contractors, tool subscriptions, domain purchases
+- Amounts over $10 being committed
+- Irreversible financial transactions
+
+Auto-approve (isFinancial = false):
+- Creating free accounts or profiles on platforms
+- Writing, researching, drafting, planning
+- Setting up tools with free tiers
+- Strategy, outreach templates, copywriting
+- Anything the AI agent can complete without spending money
+
+Respond with ONLY valid JSON:
+{
+  "isFinancial": true | false,
+  "decision": "approve" | "escalate",
+  "reason": "One sentence explaining why this is or isn't a financial decision requiring human approval"
+}`;
+
+        const response = await openai.chat.completions.create({
+          model: "gpt-4.1-mini",
+          max_completion_tokens: 256,
+          messages: [{ role: "user", content: prompt }],
+        });
+
+        const raw = response.choices[0]?.message?.content ?? "{}";
+        let decision: { isFinancial: boolean; decision: string; reason: string };
+
+        try {
+          const jsonMatch = raw.match(/\{[\s\S]*\}/);
+          decision = jsonMatch ? JSON.parse(jsonMatch[0]) : null;
+          if (typeof decision?.isFinancial !== "boolean") throw new Error("Invalid decision format");
+        } catch {
+          logger.warn({ taskId: task.id }, "Auto-orchestrator: failed to parse decision, skipping");
+          continue;
+        }
+
+        if (decision.decision === "approve" && !decision.isFinancial) {
+          // Auto-approve: resume the task
+          await db.update(tasksTable)
+            .set({ status: "in_progress", updatedAt: new Date() })
+            .where(eq(tasksTable.id, task.id));
+
+          await db.insert(taskCommentsTable).values({
+            taskId: task.id,
+            author: "Executive Orchestrator",
+            agentType: "orchestrator",
+            content: `**⚡ Auto-approved by Executive Orchestrator**\n\n${decision.reason}\n\nThis task does not require financial approval — resuming autonomous execution. Bob has been freed to focus on strategic priorities.`,
+          });
+
+          // Immediately dispatch this task
+          immediateDispatch.add(task.id);
+          lastDispatched.delete(task.id);
+
+          logger.info({ taskId: task.id, reason: decision.reason }, "Auto-orchestrator: task auto-approved and resumed");
+        } else {
+          // Genuine financial decision — flag it for Bob's attention and add a helpful comment if not already done
+          const alreadyFlagged = comments.some(c =>
+            c.author === "Executive Orchestrator" && c.content.includes("financial approval required")
+          );
+          if (!alreadyFlagged) {
+            await db.insert(taskCommentsTable).values({
+              taskId: task.id,
+              author: "Executive Orchestrator",
+              agentType: "orchestrator",
+              content: `**🔴 Financial approval required — escalated to Bob**\n\n${decision.reason}\n\nThis task involves real money spend and requires your explicit go-ahead before proceeding.`,
+            });
+            logger.info({ taskId: task.id }, "Auto-orchestrator: financial task flagged for Bob");
+          }
+        }
+      } catch (taskErr) {
+        logger.error({ taskId: task.id, taskErr }, "Auto-orchestrator: error processing task");
+      }
+    }
+  } catch (err) {
+    logger.error({ err }, "Auto-orchestrator tick: fatal error");
+  }
+}
+
+// ─── CEO Review Tick ──────────────────────────────────────────────────────────
+
+async function ceoReviewTick() {
+  try {
+    const businesses = await db.select().from(businessesTable);
+    const activeBusinesses = businesses.filter(b => b.status === "active" || b.status === "planning");
+    if (activeBusinesses.length === 0) return;
+
+    logger.info({ count: activeBusinesses.length }, "CEO review tick: reviewing businesses");
+
+    for (const business of activeBusinesses) {
+      try {
+        const tasks = await db.select().from(tasksTable).where(eq(tasksTable.businessId, business.id));
+        const artifacts = await db.select().from(businessArtifactsTable)
+          .where(eq(businessArtifactsTable.businessId, business.id))
+          .limit(5);
+
+        const openTasks = tasks.filter(t => t.status === "open").length;
+        const inProgressTasks = tasks.filter(t => t.status === "in_progress").length;
+        const closedTasks = tasks.filter(t => t.status === "closed").length;
+        const waitingTasks = tasks.filter(t => t.status === "waiting_approval").length;
+        const totalTasks = tasks.length;
+        const completionRate = totalTasks > 0 ? Math.round((closedTasks / totalTasks) * 100) : 0;
+
+        const artifactSummary = artifacts
+          .map(a => `[${a.artifactType}] ${a.title}: ${a.content.slice(0, 150)}`)
+          .join("\n");
+
+        const taskList = tasks.slice(0, 15)
+          .map(t => `- [id:${t.id}] [${t.status}] [${t.priority}] ${t.title} (${t.agentType ?? "unknown"} agent)`)
+          .join("\n");
+
+        const today = new Date().toISOString().slice(0, 10);
+        const prompt = `${CEO_SKILL_SUMMARY}
+
+---
+
+You are Bob's internal CEO Operating System running a strategic review. You are NOT a bottleneck — you delegate all task execution to the Executive Orchestrator. Your role is to set direction, financial targets, and task priorities so the Orchestrator executes with zero ambiguity.
+
+## Business State
+Name: ${business.name}
+Description: ${business.description}
+Platform: ${business.platform}
+30-Day Revenue Target: ${business.targetRevenue30d}
+Investment Available: ${business.investmentNeeded}
+Status: ${business.status}
+Today: ${today}
+Task Completion: ${closedTasks}/${totalTasks} (${completionRate}%)
+Open: ${openTasks} | In Progress: ${inProgressTasks} | Waiting Approval: ${waitingTasks} | Closed: ${closedTasks}
+
+## Task Inventory (with IDs)
+${taskList || "No tasks yet"}
+
+## Recent Work Artifacts
+${artifactSummary || "No artifacts yet"}
+
+---
+
+Produce a CEO operating directive. Apply the CEO framework above. Be aggressive on revenue — default assumption is wartime unless revenue is flowing.
+
+Respond with ONLY valid JSON:
+{
+  "mode": "wartime" | "peacetime",
+  "oneMetric": "The single most important metric right now (short phrase, e.g. 'Paying customers acquired')",
+  "oneMetricValue": "Current value of that metric based on task/artifact data (e.g. '0 — no paying customers yet')",
+  "runwayStatus": "alive" | "at_risk" | "dead",
+  "topPriority": "The #1 action the Orchestrator must execute next — specific, not generic (1-2 sentences max)",
+  "summary": "2-3 sentence CEO operating summary: mode, why, and the critical bottleneck",
+  "weeklyRevenueTarget": "Specific dollar amount the business must generate THIS week to stay on track toward the 30-day goal (e.g. '$2,000 in signed contracts by ${new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10)}')",
+  "taskDirectives": [
+    {
+      "taskId": <integer id from task list above>,
+      "priority": "critical" | "high" | "medium" | "low",
+      "reason": "One sentence explaining the priority based on fire hierarchy: distribution > revenue > product > ops"
+    }
+  ]
+}
+
+Rules for taskDirectives:
+- CRITICAL: tasks that directly create revenue or unlock distribution (first customers, outreach, closes)
+- HIGH: tasks that enable revenue paths (product required for demo, QA for first delivery)
+- MEDIUM: supporting work (research, planning)
+- LOW: anything that is ops, admin, or deferred until revenue flows
+- Only include tasks where the priority should CHANGE from current. Skip tasks already correctly prioritized.`;
+
+        const response = await openai.chat.completions.create({
+          model: "gpt-5.2",
+          max_completion_tokens: 2048,
+          messages: [{ role: "user", content: prompt }],
+        });
+
+        const raw = response.choices[0]?.message?.content ?? "{}";
+        let assessment: {
+          mode: string;
+          oneMetric: string;
+          oneMetricValue: string;
+          runwayStatus: string;
+          topPriority: string;
+          summary: string;
+          weeklyRevenueTarget?: string;
+          taskDirectives?: Array<{ taskId: number; priority: string; reason: string }>;
+        };
+
+        try {
+          const jsonMatch = raw.match(/\{[\s\S]*\}/);
+          assessment = jsonMatch ? JSON.parse(jsonMatch[0]) : null;
+          if (!assessment?.mode || !assessment?.oneMetric) throw new Error("Invalid assessment format");
+        } catch (parseErr) {
+          logger.warn({ businessId: business.id, parseErr }, "CEO review: failed to parse assessment JSON");
+          continue;
+        }
+
+        // Persist the CEO review
+        await db.insert(ceoReviewsTable).values({
+          businessId: business.id,
+          mode: assessment.mode ?? "wartime",
+          oneMetric: assessment.oneMetric ?? "Revenue generated",
+          oneMetricValue: assessment.oneMetricValue ?? "Unknown",
+          runwayStatus: assessment.runwayStatus ?? "at_risk",
+          topPriority: assessment.topPriority ?? "Start generating revenue",
+          summary: assessment.summary ?? "",
+          weeklyRevenueTarget: assessment.weeklyRevenueTarget ?? null,
+          taskDirectives: assessment.taskDirectives ? JSON.stringify(assessment.taskDirectives) : null,
+        });
+
+        logger.info(
+          { businessId: business.id, mode: assessment.mode, runwayStatus: assessment.runwayStatus },
+          "CEO review: assessment stored"
+        );
+
+        // Apply task priority directives from the CEO
+        const directives = assessment.taskDirectives ?? [];
+        for (const directive of directives) {
+          try {
+            const validPriorities = ["critical", "high", "medium", "low"];
+            if (!directive.taskId || !validPriorities.includes(directive.priority)) continue;
+
+            const [updated] = await db.update(tasksTable)
+              .set({ priority: directive.priority, updatedAt: new Date() })
+              .where(and(eq(tasksTable.id, directive.taskId), eq(tasksTable.businessId, business.id)))
+              .returning({ id: tasksTable.id, title: tasksTable.title });
+
+            if (updated) {
+              await db.insert(taskCommentsTable).values({
+                taskId: directive.taskId,
+                author: "Bob (CEO)",
+                agentType: "orchestrator",
+                content: `**📊 CEO Priority Directive:** Set to **${directive.priority.toUpperCase()}**\n\n${directive.reason}`,
+              });
+              logger.info({ taskId: directive.taskId, priority: directive.priority }, "CEO review: task priority updated");
+            }
+          } catch (directiveErr) {
+            logger.warn({ taskId: directive.taskId, directiveErr }, "CEO review: failed to apply task directive");
+          }
+        }
+      } catch (bizErr) {
+        logger.error({ businessId: business.id, bizErr }, "CEO review: failed for business");
+      }
+    }
+  } catch (err) {
+    logger.error({ err }, "CEO review tick: fatal error");
+  }
+}
+
 // ─── Orchestrator Monitor Tick ────────────────────────────────────────────────
 
 async function orchestratorTick() {
@@ -485,7 +735,12 @@ async function orchestratorTick() {
     );
 
     if (inProgressTasks.length === 0 && waitingTasks.length > 0) {
-      logger.warn({ count: waitingTasks.length }, "Orchestrator: all tasks blocked on approval — waiting for owner");
+      logger.warn({ count: waitingTasks.length }, "Orchestrator: all tasks blocked on approval — running auto-orchestrator");
+    }
+
+    // Auto-orchestrator: classify and auto-approve non-financial waiting tasks every tick
+    if (waitingTasks.length > 0) {
+      autoOrchestratorTick().catch(err => logger.error({ err }, "Auto-orchestrator tick failed"));
     }
 
     // Load businesses for context
@@ -593,6 +848,12 @@ async function orchestratorTick() {
     if (now - lastScheduledEmailAt >= SCHEDULED_EMAIL_INTERVAL_MS) {
       lastScheduledEmailAt = now;
       sendScheduledEmails().catch(err => logger.error({ err }, "Scheduled email send failed"));
+    }
+
+    // CEO review every 5 minutes
+    if (now - lastCeoReviewAt >= CEO_REVIEW_INTERVAL_MS) {
+      lastCeoReviewAt = now;
+      ceoReviewTick().catch(err => logger.error({ err }, "CEO review tick failed"));
     }
   } catch (err) {
     logger.error({ err }, "Orchestrator tick failed");

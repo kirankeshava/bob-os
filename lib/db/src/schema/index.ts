@@ -7,4 +7,5 @@ export * from "./business-sites";
 export * from "./outreach-emails";
 export * from "./signups";
 export * from "./skills";
-export * from "./knowledge-base";
+export * from "./customers";
+export * from "./ceo-reviews";
