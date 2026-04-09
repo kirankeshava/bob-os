@@ -10,3 +10,7 @@ export * from "./skills";
 export * from "./customers";
 export * from "./ceo-reviews";
 export * from "./knowledge-base";
+export * from "./ceo-plan";
+export * from "./ceo-chat";
+export * from "./reviews";
+export * from "./daily-reports";

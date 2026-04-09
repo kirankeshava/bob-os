@@ -63,6 +63,9 @@ pnpm workspace monorepo using TypeScript. Each package manages its own dependenc
   - `POST /businesses/:id/knowledge-base/upload` — Upload a file (PDF, DOCX, TXT) to the KB; text is extracted asynchronously
   - `POST /businesses/:id/knowledge-base/url` — Add a URL to the KB; content is crawled asynchronously
   - `DELETE /businesses/:id/knowledge-base/:entryId` — Delete a KB entry
+  - `GET /customers/:id/reviews` — List all reviews for a customer
+  - `POST /customers/:id/reviews` — Batch import reviews for a customer
+  - `GET /customers/:id/reports` — List 7-day report schedule and history
 
 ## Database Schema (PostgreSQL via Drizzle)
 
@@ -75,6 +78,9 @@ pnpm workspace monorepo using TypeScript. Each package manages its own dependenc
 - `skills` — Dynamic skills (SKILL.md packages from GitHub) with name, slug, source, content, status (active/disabled), businessId (null = global)
 - `ceo_reviews` — CEO operating assessments per business (mode, oneMetric, runwayStatus, topPriority, weeklyRevenueTarget, taskDirectives JSON)
 - `knowledge_base_entries` — Customer-specific knowledge base with entryType (file|url), sourceName, sourceUrl, rawText, status (processing|ready|error), errorMessage
+- `customers` — Customer signups with trial/subscription status, Stripe ID, review platform URLs
+- `reviews` — Customer reviews (platform, rating, author, text, date, AI-proposed reply text, respondedAt)
+- `daily_reports` — 7-day report schedule per customer (dayNumber 1-7, sentAt, emailMessageId, reportData JSON)
 
 ## Knowledge Base System
 
@@ -84,10 +90,20 @@ Enables operators to ground AI reply suggestions in business-specific content:
 - **AI integration**: Before generating email replies in `monitorInboxes()`, top-3 relevant KB entries are keyword-scored against the inbound message and injected into the OpenAI prompt
 - **Mission Control UI**: "Knowledge Base" tab on business detail page with URL input, file upload widget, entry list with type badge / status chip / source name / delete button; status auto-refreshes every 5s
 
+## Daily Review Reports System
+
+Delivers automated 7-day email series to each new customer during their trial:
+- **Review seeding**: 12 realistic sample reviews auto-seeded on customer signup (so day-1 report is non-empty)
+- **7-day schedule**: On signup, 7 `daily_reports` rows created (days 1-7); sent when `daysSinceSignup >= dayNumber`
+- **Report generation**: `services/report-generator.ts` computes avg rating, star distribution, trend; selects 3 newest + 3 lowest-rated reviews; calls OpenAI (gpt-4.1-mini) to generate proposed reply for each
+- **Email rendering**: Polished HTML email with inline CSS — sections: Summary stats, Latest Reviews, Needs Attention, Proposed Replies (copy-paste ready)
+- **Scheduler**: `sendDueReportEmails()` runs hourly in the orchestrator loop; sends via AgentMail; persists sentAt + reportData
+- **Dashboard**: "View Reports" toggle on each customer row — shows stats, 7-day schedule buttons, report preview, and recent reviews with AI replies
+
 ## AI Integration
 
 - Provider: OpenAI via Replit AI Integrations (no API key required)
-- Model: gpt-5.2 for researcher, orchestrator, and CEO review agents; gpt-4.1-mini for auto-orchestrator decisions
+- Model: gpt-5.2 for researcher, orchestrator, and CEO review agents; gpt-4.1-mini for auto-orchestrator decisions and review reply generation
 - Researcher agent: Finds top 5 business ideas, saves to DB
 - Orchestrator agent: Creates 5-8 tasks per business with agent assignments
 
