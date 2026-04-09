@@ -480,7 +480,7 @@ async function orchestratorTick() {
           ? `https://${process.env.REPLIT_DEV_DOMAIN}/sites/${task.businessId}`
           : null;
         const siteUrl = site ? baseUrl : null;
-        const contactEmail = site?.contactEmail ?? site?.emailAddress ?? null;
+        const contactEmail = site?.contactEmail ?? site?.emailAddress ?? biz?.emailAddress ?? null;
 
         try {
           await executeTask(task, biz.name, biz.description, siteUrl, contactEmail);
