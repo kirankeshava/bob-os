@@ -9,7 +9,7 @@ import artifactsRouter from "./artifacts";
 import sitesRouter from "./sites";
 import emailRouter from "./email";
 import syncRouter from "./sync";
-import signupRouter from "./signup";
+import ceoReviewsRouter from "./ceo-reviews";
 
 const router: IRouter = Router();
 
@@ -18,11 +18,11 @@ router.use("/businesses", businessesRouter);
 router.use("/businesses/:businessId/artifacts", artifactsRouter);
 router.use("/businesses/:businessId/site", sitesRouter);
 router.use("/businesses/:businessId/inbox", emailRouter);
+router.use("/businesses/:businessId/ceo-review", ceoReviewsRouter);
 router.use("/", tasksRouter);
 router.use("/", commentsRouter);
 router.use("/dashboard", dashboardRouter);
 router.use("/agent", agentsRouter);
 router.use("/sync", syncRouter);
-router.use("/businesses/:businessId/signup", signupRouter);
 
 export default router;

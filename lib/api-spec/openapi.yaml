@@ -455,6 +455,27 @@ paths:
                   - sequenceCount
                   - emails
 
+  /businesses/{businessId}/ceo-review:
+    get:
+      operationId: getBusinessCeoReview
+      tags: [businesses]
+      summary: Get the latest CEO review for a business
+      parameters:
+        - name: businessId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Latest CEO review
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CeoReview"
+        "404":
+          description: No CEO review found
+
   /businesses/{businessId}/artifacts:
     get:
       operationId: listBusinessArtifacts
@@ -578,6 +599,40 @@ paths:
 
 components:
   schemas:
+    CeoReview:
+      type: object
+      properties:
+        id:
+          type: integer
+        businessId:
+          type: integer
+        mode:
+          type: string
+          enum: [wartime, peacetime]
+        oneMetric:
+          type: string
+        oneMetricValue:
+          type: string
+        runwayStatus:
+          type: string
+          enum: [alive, at_risk, dead]
+        topPriority:
+          type: string
+        summary:
+          type: string
+        createdAt:
+          type: string
+      required:
+        - id
+        - businessId
+        - mode
+        - oneMetric
+        - oneMetricValue
+        - runwayStatus
+        - topPriority
+        - summary
+        - createdAt
+
     BusinessArtifact:
       type: object
       properties:
