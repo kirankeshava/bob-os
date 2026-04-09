@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useMemo } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import { useRoute, Link } from "wouter";
 import { useLocation } from "wouter";
 import {
@@ -589,7 +589,7 @@ function EmailRow({ email }: { email: OutreachEmail }) {
 
   return (
     <div
-      className={`border rounded-md mb-1 cursor-pointer transition-colors ${
+      className={`border rounded-md mb-1.5 cursor-pointer transition-colors ${
         isInbound
           ? "border-blue-500/20 bg-blue-500/5 hover:border-blue-500/40"
           : "border-border/30 bg-card/30 hover:border-border/60"
@@ -634,57 +634,6 @@ function EmailRow({ email }: { email: OutreachEmail }) {
   );
 }
 
-interface EmailThreadProps {
-  threadId: string;
-  emails: OutreachEmail[];
-}
-
-function EmailThread({ threadId, emails }: EmailThreadProps) {
-  const [expanded, setExpanded] = useState(false);
-  const latest = emails[0];
-  const hasInbound = emails.some(e => e.direction === "inbound");
-  const isUnthreaded = threadId === "__no_thread__";
-
-  if (isUnthreaded) {
-    return <>{emails.map(email => <EmailRow key={email.id} email={email} />)}</>;
-  }
-
-  return (
-    <div className={`border rounded-md mb-1.5 transition-colors ${
-      hasInbound ? "border-blue-500/20 bg-blue-500/5" : "border-border/30 bg-card/30"
-    }`}>
-      <div
-        className="p-2.5 cursor-pointer hover:bg-muted/10 transition-colors"
-        onClick={() => setExpanded(e => !e)}
-      >
-        <div className="flex items-center gap-2">
-          <span className="text-[9px] font-mono text-muted-foreground/50 uppercase shrink-0">Thread</span>
-          <span className="text-xs font-mono text-muted-foreground truncate flex-1">
-            {latest?.subject || "(no subject)"}
-          </span>
-          <Badge variant="outline" className="text-[9px] font-mono px-1 py-0 border-border/40 text-muted-foreground shrink-0">
-            {emails.length} msg{emails.length !== 1 ? "s" : ""}
-          </Badge>
-          {hasInbound && (
-            <Badge variant="outline" className="text-[9px] font-mono px-1 py-0 border-blue-500/30 text-blue-400 shrink-0">
-              reply
-            </Badge>
-          )}
-          <span className="text-[9px] text-muted-foreground/60 font-mono shrink-0">
-            {timeAgo(latest?.sentAt || latest?.scheduledFor || latest?.createdAt)}
-          </span>
-          <ChevronDown className={`h-3 w-3 text-muted-foreground/50 shrink-0 transition-transform ${expanded ? "rotate-180" : ""}`} />
-        </div>
-      </div>
-      {expanded && (
-        <div className="px-2.5 pb-2.5 space-y-1 border-t border-border/20 pt-2">
-          {emails.map(email => <EmailRow key={email.id} email={email} />)}
-        </div>
-      )}
-    </div>
-  );
-}
-
 interface InboxTabProps {
   businessId: number;
   businessName: string;
@@ -702,30 +651,6 @@ function InboxTab({ businessId, businessName, business }: InboxTabProps) {
   const emailAddress = business.emailAddress ?? inboxData?.emailAddress;
   const messages = inboxData?.logged ?? [];
   const inboundCount = messages.filter(m => m.direction === "inbound" && m.status === "received").length;
-
-  // Group messages by threadId; messages without a threadId go into a catch-all group
-  const threadMap = useMemo(() => {
-    const map = new Map<string, OutreachEmail[]>();
-    for (const msg of messages) {
-      const key = (msg as OutreachEmail & { threadId?: string | null }).threadId || "__no_thread__";
-      const list = map.get(key) ?? [];
-      list.push(msg);
-      map.set(key, list);
-    }
-    // Sort each thread newest-first; sort threads by latest message
-    for (const [k, v] of map) {
-      map.set(k, v.sort((a, b) => {
-        const ta = new Date(a.sentAt || a.scheduledFor || a.createdAt).getTime();
-        const tb = new Date(b.sentAt || b.scheduledFor || b.createdAt).getTime();
-        return tb - ta;
-      }));
-    }
-    return [...map.entries()].sort(([, a], [, b]) => {
-      const ta = new Date(a[0].sentAt || a[0].scheduledFor || a[0].createdAt).getTime();
-      const tb = new Date(b[0].sentAt || b[0].scheduledFor || b[0].createdAt).getTime();
-      return tb - ta;
-    });
-  }, [messages]);
 
   const copyEmail = () => {
     if (emailAddress) {
@@ -818,8 +743,8 @@ function InboxTab({ businessId, businessName, business }: InboxTabProps) {
         </Card>
       ) : (
         <div>
-          {threadMap.map(([threadId, threadEmails]) => (
-            <EmailThread key={threadId} threadId={threadId} emails={threadEmails} />
+          {messages.map(email => (
+            <EmailRow key={email.id} email={email} />
           ))}
         </div>
       )}
