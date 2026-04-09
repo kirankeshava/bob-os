@@ -249,55 +249,86 @@ async function monitorInboxes() {
   try {
     const businesses = await db.select().from(businessesTable);
     const bizWithInbox = businesses.filter(b => b.emailInboxId);
-
     if (bizWithInbox.length === 0) return;
 
-    logger.info({ count: bizWithInbox.length }, "Inbox monitor: checking inboxes");
+    // Fetch all messages from the shared inbox ONCE — avoid N calls
+    const sharedInboxId = bizWithInbox[0].emailInboxId!;
+    const allMessages = await listMessages(sharedInboxId);
+    if (allMessages.length === 0) return;
 
-    for (const business of bizWithInbox) {
-      try {
-        const messages = await listMessages(business.emailInboxId!);
+    logger.info({ count: bizWithInbox.length, messages: allMessages.length }, "Inbox monitor: checking inboxes");
 
-        for (const msg of messages) {
-          if (!msg.id) continue;
+    // Build a routing map: email address (lowercase) → business
+    // Sub-addresses like agent_bob_replit+review-bot@agentmail.to route to the specific business
+    // The bare base address routes to ALL businesses (legacy / forwarded messages)
+    const subAddressMap = new Map<string, typeof businesses[0]>();
+    let baseAddress = sharedInboxId.toLowerCase();
+    for (const biz of bizWithInbox) {
+      const addr = (biz.emailAddress ?? "").toLowerCase();
+      if (addr && addr !== baseAddress) {
+        subAddressMap.set(addr, biz);
+      }
+    }
 
-          // Dedup by message_id
-          const [existing] = await db.select().from(outreachEmailsTable)
-            .where(and(
-              eq(outreachEmailsTable.businessId, business.id),
-              eq(outreachEmailsTable.messageId, msg.id),
-            ));
-          if (existing) continue;
+    for (const msg of allMessages) {
+      if (!msg.id) continue;
+      const toField = (msg.to ?? "").toLowerCase();
 
-          // Save inbound message
-          await db.insert(outreachEmailsTable).values({
-            businessId: business.id,
-            inboxId: business.emailInboxId!,
-            messageId: msg.id,
-            threadId: msg.threadId ?? null,
-            direction: "inbound",
-            fromAddress: msg.from,
-            toAddress: msg.to,
-            subject: msg.subject,
-            body: msg.body,
-            status: "received",
-            agentType: null,
-            sentAt: msg.receivedAt ? new Date(msg.receivedAt) : new Date(),
-          });
+      // Determine which businesses this message belongs to
+      let targetBusinesses: typeof businesses = [];
 
-          logger.info({ businessId: business.id, messageId: msg.id, from: msg.from }, "Inbox monitor: new inbound message saved");
+      // Check if the message is addressed to a specific sub-address
+      for (const [addr, biz] of subAddressMap) {
+        if (toField.includes(addr)) {
+          targetBusinesses = [biz];
+          break;
+        }
+      }
 
-          // Draft and send an AI reply
-          try {
-            const recentArtifacts = await db.select().from(businessArtifactsTable)
-              .where(eq(businessArtifactsTable.businessId, business.id))
-              .limit(3);
+      // If no sub-address match, the message was sent to the bare base address —
+      // attribute it to all businesses so it shows up everywhere
+      if (targetBusinesses.length === 0 && toField.includes(baseAddress)) {
+        targetBusinesses = bizWithInbox;
+      }
 
-            const artifactSummary = recentArtifacts
-              .map(a => `[${a.artifactType}] ${a.title}: ${a.content.slice(0, 200)}`)
-              .join("\n");
+      for (const business of targetBusinesses) {
+        // Dedup by (businessId, messageId)
+        const [existing] = await db.select().from(outreachEmailsTable)
+          .where(and(
+            eq(outreachEmailsTable.businessId, business.id),
+            eq(outreachEmailsTable.messageId, msg.id),
+          ));
+        if (existing) continue;
 
-            const replyPrompt = `You are representing "${business.name}" and received the following email. Write a professional, friendly reply.
+        // Save inbound message
+        await db.insert(outreachEmailsTable).values({
+          businessId: business.id,
+          inboxId: business.emailInboxId!,
+          messageId: msg.id,
+          threadId: msg.threadId ?? null,
+          direction: "inbound",
+          fromAddress: msg.from,
+          toAddress: msg.to,
+          subject: msg.subject,
+          body: msg.body,
+          status: "received",
+          agentType: null,
+          sentAt: msg.receivedAt ? new Date(msg.receivedAt) : new Date(),
+        });
+
+        logger.info({ businessId: business.id, messageId: msg.id, from: msg.from }, "Inbox monitor: new inbound message saved");
+
+        // Draft an AI reply
+        try {
+          const recentArtifacts = await db.select().from(businessArtifactsTable)
+            .where(eq(businessArtifactsTable.businessId, business.id))
+            .limit(3);
+
+          const artifactSummary = recentArtifacts
+            .map(a => `[${a.artifactType}] ${a.title}: ${a.content.slice(0, 200)}`)
+            .join("\n");
+
+          const replyPrompt = `You are representing "${business.name}" and received the following email. Write a professional, friendly reply.
 
 Business: ${business.name}
 Description: ${business.description}
@@ -312,45 +343,42 @@ ${artifactSummary || "None"}
 Write a concise, helpful reply (100-150 words). Be professional but warm. Sign off as "${business.name} Team".
 Reply with ONLY the email body text — no subject line, no metadata.`;
 
-            const aiResponse = await openai.chat.completions.create({
-              model: "gpt-5.2",
-              max_completion_tokens: 512,
-              messages: [{ role: "user", content: replyPrompt }],
-            });
+          const aiResponse = await openai.chat.completions.create({
+            model: "gpt-5.2",
+            max_completion_tokens: 512,
+            messages: [{ role: "user", content: replyPrompt }],
+          });
 
-            const replyBody = aiResponse.choices[0]?.message?.content?.trim();
-            if (replyBody && msg.threadId) {
-              const replyResult = await sendEmail(
-                business.emailInboxId!,
-                msg.from,
-                `Re: ${msg.subject}`,
-                replyBody,
-              );
+          const replyBody = aiResponse.choices[0]?.message?.content?.trim();
+          if (replyBody && msg.threadId) {
+            const replyResult = await sendEmail(
+              business.emailInboxId!,
+              msg.from,
+              `Re: ${msg.subject}`,
+              replyBody,
+            );
 
-              if (replyResult) {
-                await db.insert(outreachEmailsTable).values({
-                  businessId: business.id,
-                  inboxId: business.emailInboxId!,
-                  messageId: replyResult.messageId,
-                  threadId: replyResult.threadId ?? msg.threadId,
-                  direction: "outbound",
-                  toAddress: msg.from,
-                  fromAddress: business.emailAddress ?? null,
-                  subject: `Re: ${msg.subject}`,
-                  body: replyBody,
-                  status: "sent",
-                  agentType: "sales",
-                  sentAt: new Date(),
-                });
-                logger.info({ businessId: business.id, to: msg.from }, "Inbox monitor: AI reply sent");
-              }
+            if (replyResult) {
+              await db.insert(outreachEmailsTable).values({
+                businessId: business.id,
+                inboxId: business.emailInboxId!,
+                messageId: replyResult.messageId,
+                threadId: replyResult.threadId ?? msg.threadId,
+                direction: "outbound",
+                toAddress: msg.from,
+                fromAddress: business.emailAddress ?? null,
+                subject: `Re: ${msg.subject}`,
+                body: replyBody,
+                status: "sent",
+                agentType: "sales",
+                sentAt: new Date(),
+              });
+              logger.info({ businessId: business.id, to: msg.from }, "Inbox monitor: AI reply sent");
             }
-          } catch (replyErr) {
-            logger.error({ replyErr, businessId: business.id }, "Inbox monitor: AI reply failed");
           }
+        } catch (replyErr) {
+          logger.error({ replyErr, businessId: business.id }, "Inbox monitor: AI reply failed");
         }
-      } catch (err) {
-        logger.error({ err, businessId: business.id }, "Inbox monitor: error checking inbox");
       }
     }
   } catch (err) {

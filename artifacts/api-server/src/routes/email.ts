@@ -29,7 +29,24 @@ router.get("/", async (req, res) => {
   const inbox = await getBusinessInbox(businessId);
   if (!inbox) { res.status(404).json({ error: "No inbox set up for this business" }); return; }
 
-  const messages = await listMessages(inbox.inboxId);
+  const allMessages = await listMessages(inbox.inboxId);
+
+  // Filter messages addressed to this business's specific email address.
+  // Plus-addressed messages (e.g. agent_bob_replit+review-bot@agentmail.to) are
+  // filtered to the owning business. Messages sent to the bare base address
+  // (agent_bob_replit@agentmail.to) fall through to all businesses.
+  const businessEmail = inbox.emailAddress ?? "";
+  const baseAddress = businessEmail.includes("+")
+    ? businessEmail.replace(/\+[^@]+/, "")   // strip the +tag to get base
+    : businessEmail;
+
+  const messages = allMessages.filter(m => {
+    const toField = (m.to ?? "").toLowerCase();
+    // Match if explicitly addressed to this sub-address OR to the bare base address
+    return toField.includes(businessEmail.toLowerCase()) ||
+           toField.includes(baseAddress.toLowerCase());
+  });
+
   const logged = await db.select().from(outreachEmailsTable)
     .where(eq(outreachEmailsTable.businessId, businessId))
     .orderBy(desc(outreachEmailsTable.createdAt))
