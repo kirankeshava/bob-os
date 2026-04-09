@@ -1,9 +1,9 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Users, Clock, CheckCircle, XCircle, AlertTriangle, ExternalLink, RefreshCw } from "lucide-react";
+import { Users, Clock, CheckCircle, XCircle, AlertTriangle, ExternalLink, RefreshCw, CreditCard, DollarSign, Check } from "lucide-react";
 
 interface Customer {
   id: number;
@@ -14,6 +14,8 @@ interface Customer {
   googleUrl: string | null;
   yelpUrl: string | null;
   stripeCustomerId: string | null;
+  paymentMethod: string;
+  paypalSubscriptionId: string | null;
   subscriptionStatus: string;
   trialStartAt: string;
   trialEndAt: string;
@@ -25,6 +27,12 @@ const STATUS_CONFIG: Record<string, { label: string; color: string; icon: React.
   active: { label: "Active", color: "bg-green-500/20 text-green-300 border-green-500/30", icon: CheckCircle },
   trial_expired: { label: "Trial Expired", color: "bg-amber-500/20 text-amber-300 border-amber-500/30", icon: AlertTriangle },
   cancelled: { label: "Cancelled", color: "bg-red-500/20 text-red-300 border-red-500/30", icon: XCircle },
+};
+
+const PAYMENT_METHOD_CONFIG: Record<string, { label: string; color: string; icon: React.ElementType }> = {
+  stripe: { label: "Stripe", color: "bg-indigo-500/20 text-indigo-300 border-indigo-500/30", icon: CreditCard },
+  paypal: { label: "PayPal", color: "bg-blue-500/20 text-blue-300 border-blue-500/30", icon: CreditCard },
+  zelle: { label: "Zelle", color: "bg-green-500/20 text-green-300 border-green-500/30", icon: DollarSign },
 };
 
 function daysUntil(dateStr: string): number {
@@ -39,6 +47,7 @@ function formatDate(dateStr: string) {
 
 export default function CustomersPage() {
   const [filter, setFilter] = useState<string | null>(null);
+  const queryClient = useQueryClient();
 
   const { data: customers = [], isLoading, refetch } = useQuery<Customer[]>({
     queryKey: ["customers"],
@@ -48,6 +57,24 @@ export default function CustomersPage() {
       return res.json();
     },
     refetchInterval: 30000,
+  });
+
+  const markPaidMutation = useMutation({
+    mutationFn: async (customerId: number) => {
+      const res = await fetch(`/api/customers/${customerId}/mark-paid`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ note: "Manually marked as paid by admin" }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error ?? "Failed to mark as paid");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["customers"] });
+    },
   });
 
   const filtered = filter ? customers.filter(c => c.subscriptionStatus === filter) : customers;
@@ -139,6 +166,10 @@ export default function CustomersPage() {
                 const Icon = cfg.icon;
                 const daysLeft = daysUntil(customer.trialEndAt);
                 const isTrialActive = customer.subscriptionStatus === "trial";
+                const pmCfg = PAYMENT_METHOD_CONFIG[customer.paymentMethod] ?? PAYMENT_METHOD_CONFIG.stripe;
+                const PmIcon = pmCfg.icon;
+                const isZelle = customer.paymentMethod === "zelle";
+                const canMarkPaid = isZelle && customer.subscriptionStatus !== "active";
 
                 return (
                   <div key={customer.id} className="p-4 hover:bg-muted/10 transition-colors">
@@ -169,10 +200,16 @@ export default function CustomersPage() {
                         </div>
                       </div>
                       <div className="flex flex-col items-end gap-1.5 shrink-0">
-                        <Badge variant="outline" className={`text-[10px] font-mono uppercase flex items-center gap-1 ${cfg.color}`}>
-                          <Icon className="h-2.5 w-2.5" />
-                          {cfg.label}
-                        </Badge>
+                        <div className="flex items-center gap-1.5">
+                          <Badge variant="outline" className={`text-[10px] font-mono uppercase flex items-center gap-1 ${pmCfg.color}`}>
+                            <PmIcon className="h-2.5 w-2.5" />
+                            {pmCfg.label}
+                          </Badge>
+                          <Badge variant="outline" className={`text-[10px] font-mono uppercase flex items-center gap-1 ${cfg.color}`}>
+                            <Icon className="h-2.5 w-2.5" />
+                            {cfg.label}
+                          </Badge>
+                        </div>
                         {isTrialActive && (
                           <span className={`text-[10px] font-mono ${daysLeft <= 2 ? "text-amber-400" : "text-muted-foreground"}`}>
                             {daysLeft > 0 ? `${daysLeft}d left` : "Expires today"}
@@ -185,6 +222,27 @@ export default function CustomersPage() {
                           <span className="text-[9px] text-muted-foreground/40 font-mono">
                             {customer.stripeCustomerId.slice(0, 14)}…
                           </span>
+                        )}
+                        {customer.paypalSubscriptionId && (
+                          <span className="text-[9px] text-muted-foreground/40 font-mono">
+                            PP: {customer.paypalSubscriptionId.slice(0, 14)}…
+                          </span>
+                        )}
+                        {canMarkPaid && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="text-[10px] h-6 px-2 font-mono border-green-500/30 text-green-400 hover:bg-green-500/10 hover:text-green-300 mt-1"
+                            disabled={markPaidMutation.isPending}
+                            onClick={() => markPaidMutation.mutate(customer.id)}
+                          >
+                            {markPaidMutation.isPending ? (
+                              <RefreshCw className="h-2.5 w-2.5 mr-1 animate-spin" />
+                            ) : (
+                              <Check className="h-2.5 w-2.5 mr-1" />
+                            )}
+                            Mark as Paid
+                          </Button>
                         )}
                       </div>
                     </div>

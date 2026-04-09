@@ -10,4 +10,3 @@ export * from "./skills";
 export * from "./customers";
 export * from "./ceo-reviews";
 export * from "./knowledge-base";
-export * from "./business-performance";
