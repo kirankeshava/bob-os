@@ -9,9 +9,10 @@ import { CEO_SKILL_SUMMARY } from "../lib/ceo-skill";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const MONITOR_INTERVAL_MS = 30_000;          // Orchestrator checks every 30s
-const TASK_WORK_INTERVAL_MS = 2.5 * 60_000; // Each task gets a new work cycle every 2.5 min
-const STALL_THRESHOLD_MS = 6 * 60_000;      // After 6 min with no update, task is considered stalled
+const MONITOR_INTERVAL_MS = 20_000;          // Orchestrator checks every 20s
+const TASK_WORK_INTERVAL_MS = 90_000;        // Each task gets a new work cycle every 90s
+const STALL_THRESHOLD_MS = 4 * 60_000;      // After 4 min with no update, task is considered stalled
+const MAX_CONCURRENT_TASKS = 6;             // Run up to 6 AI calls in parallel
 const INBOX_CHECK_INTERVAL_MS = 5 * 60_000; // Check inboxes every 5 min
 const SCHEDULED_EMAIL_INTERVAL_MS = 60 * 60_000; // Send scheduled emails every hour
 const CEO_REVIEW_INTERVAL_MS = 5 * 60_000;  // CEO review runs every 5 minutes
@@ -857,9 +858,8 @@ async function orchestratorTick() {
       }
     }
 
-    // Run task work concurrently (but cap at 3 parallel to avoid rate limits)
     const chunks: (typeof toDispatch)[] = [];
-    for (let i = 0; i < toDispatch.length; i += 3) chunks.push(toDispatch.slice(i, i + 3));
+    for (let i = 0; i < toDispatch.length; i += MAX_CONCURRENT_TASKS) chunks.push(toDispatch.slice(i, i + MAX_CONCURRENT_TASKS));
 
     for (const chunk of chunks) {
       await Promise.all(chunk.map(async task => {
@@ -932,7 +932,6 @@ async function runOrchestratorLoop() {
 
   while (orchestratorRunning) {
     await orchestratorTick();
-    // Wait 30 seconds before next check
     await new Promise(resolve => setTimeout(resolve, MONITOR_INTERVAL_MS));
   }
 
