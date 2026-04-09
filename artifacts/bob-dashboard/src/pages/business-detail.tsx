@@ -1089,6 +1089,46 @@ export default function BusinessDetail() {
   const recentMilestones = closedTasks.slice(0, 3);
   const hasTasks = (tasks?.length ?? 0) > 0;
 
+  type OwnerAction = { priority: number; icon: React.ReactNode; text: string; taskId?: number; color: string };
+  const ownerActions: OwnerAction[] = [];
+
+  for (const t of waitingTasks) {
+    const atype = detectApprovalType(t);
+    if (atype === "payment") {
+      ownerActions.push({ priority: 0, icon: <DollarSign className="h-3.5 w-3.5" />, text: `Approve spend: ${t.title}`, taskId: t.id, color: "text-red-400" });
+    } else {
+      ownerActions.push({ priority: 1, icon: <ShieldAlert className="h-3.5 w-3.5" />, text: `Review & approve: ${t.title}`, taskId: t.id, color: "text-amber-400" });
+    }
+  }
+
+  for (const t of [...inProgressTasks, ...openTasks]) {
+    if (t.priority === "critical") {
+      ownerActions.push({ priority: 2, icon: <Flame className="h-3.5 w-3.5" />, text: `Critical task: ${t.title}`, taskId: t.id, color: "text-red-400" });
+    }
+  }
+
+  const staleThreshold = 2 * 60 * 60 * 1000;
+  for (const t of inProgressTasks) {
+    const lastUpdate = t.lastProgressUpdate ? new Date(t.lastProgressUpdate).getTime() : 0;
+    if (lastUpdate > 0 && Date.now() - lastUpdate > staleThreshold && t.priority !== "critical") {
+      ownerActions.push({ priority: 4, icon: <Clock className="h-3.5 w-3.5" />, text: `Stale (${timeAgo(t.lastProgressUpdate)}): ${t.title}`, taskId: t.id, color: "text-yellow-400" });
+    }
+  }
+
+  for (const t of openTasks.filter(tt => tt.priority === "high")) {
+    ownerActions.push({ priority: 3, icon: <AlertTriangle className="h-3.5 w-3.5" />, text: `High-priority not started: ${t.title}`, taskId: t.id, color: "text-orange-400" });
+  }
+
+  if (!site) {
+    ownerActions.push({ priority: 5, icon: <Globe className="h-3.5 w-3.5" />, text: "Generate a public website to start acquiring customers", color: "text-blue-400" });
+  }
+
+  if ((kbEntries?.length ?? 0) === 0 && site) {
+    ownerActions.push({ priority: 6, icon: <BookOpen className="h-3.5 w-3.5" />, text: "Add knowledge base content so AI replies are grounded in your business", color: "text-purple-400" });
+  }
+
+  ownerActions.sort((a, b) => a.priority - b.priority);
+
   // Separate payment vs non-payment approvals for ordering (payments first)
   const sortedWaiting = [...waitingTasks].sort((a, b) => {
     const scoreA = detectApprovalType(a) === "payment" ? 0 : detectApprovalType(a) === "account" ? 1 : 2;
@@ -1338,6 +1378,34 @@ export default function BusinessDetail() {
             ))}
           </div>
         </div>
+      )}
+
+      {/* Owner Action Items */}
+      {ownerActions.length > 0 && (
+        <Card className="bg-card/40 border-border/60">
+          <CardContent className="p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <Target className="h-4 w-4 text-cyan-400" />
+              <h3 className="font-mono font-bold text-sm uppercase tracking-wider text-cyan-400">Your Action Items</h3>
+              <Badge variant="secondary" className="font-mono text-[10px] px-1.5 py-0">{ownerActions.length}</Badge>
+            </div>
+            <ul className="space-y-2">
+              {ownerActions.map((action, i) => (
+                <li
+                  key={i}
+                  className={`flex items-start gap-2.5 text-sm ${action.taskId ? "cursor-pointer hover:bg-muted/30 -mx-2 px-2 py-1 rounded-md transition-colors" : "py-1"}`}
+                  onClick={action.taskId ? () => navigate(`/businesses/${businessId}/tasks/${action.taskId}`) : undefined}
+                >
+                  <span className={`${action.color} mt-0.5 shrink-0`}>{action.icon}</span>
+                  <span className="text-foreground/90">{action.text}</span>
+                  {action.taskId && (
+                    <span className="text-muted-foreground/50 text-[10px] font-mono ml-auto shrink-0 mt-0.5">T-{action.taskId} →</span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </CardContent>
+        </Card>
       )}
 
       {/* Tab Navigation */}

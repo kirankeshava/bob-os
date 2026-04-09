@@ -209,7 +209,15 @@ Respond with ONLY valid JSON:
   }
 }
 
-## FINANCIAL SAFEGUARDS — NON-NEGOTIABLE:
+## WEEK 1 POLICY — FREE LAUNCH (NO SPEND):
+We are in the first 7 days. ALL services are offered FREE to customers. You have a $0 budget.
+- Do NOT request "needs_approval" — there is nothing to approve because you must not spend money.
+- Use ONLY free tiers, free tools, organic outreach, and zero-cost methods.
+- Customer onboarding is free (7-day trial, no payment collection).
+- If a task truly cannot be done without spending money, mark it "complete" and note what paid step is needed later.
+- Focus on: building deliverables, creating accounts (free), writing copy, outreach, onboarding customers, setting up systems.
+
+## FINANCIAL SAFEGUARDS (POST WEEK 1):
 1. NEVER spend, commit, transfer, or allocate any money without requesting "needs_approval" first.
 2. ANY time a task requires spending money, set recommendation="needs_approval" and explain EXACTLY: what the expense is, how much ($), what platform, what cheaper alternatives exist.
 3. ALWAYS prefer free/zero-cost approaches first. Only recommend paid options if free options are exhausted.
